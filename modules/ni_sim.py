@@ -97,7 +97,7 @@ class environment:
 
             xA += xA_single
             xB += xB_single
-            print(f'{index/len(sources)*100:0.3}', end='\r')
+            #print(f'{index/len(sources)*100:0.3}', end='\r')
         return xA, xB
 
     def __get_radius(self, coord):
@@ -130,19 +130,13 @@ class environment:
         #chunks = [sources.ix[sources.index[i:i + chunk_size]] for i in range(0, sources.shape[0],chunk_size)]
         chunks = [sources.iloc[i:i + chunk_size,:] for i in range(0, sources.shape[0], chunk_size)]
 
-        # Execute without multiprocessing for now
-        result = []
-        for k, chunk in enumerate():
-            # create pool with 'num_processes' processes
-            # pool = mp.Pool(processes = num_processes)
-
-            #result = pool.map(self.__get_signals_1cpu, chunks)
-            result.append(self.__get_signals_1cpu(chunk))
-            print(f'{(k+1)/num_processes*100:0.3}', end='\r')
+        # create pool with 'num_processes' processes
+        pool = mp.Pool(processes = num_processes)
+        result = pool.map(self.get_signals_1cpu, chunks)
+        pool.close()
         # Unpack result
         xA = np.zeros(self.t.shape)
         xB = np.zeros(self.t.shape)
-
         for k in range(num_processes):
             xA += result[k][0]
             xB += result[k][1]
