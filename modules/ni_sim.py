@@ -1,11 +1,13 @@
 import numpy as np
 import scipy
-from matplotlib import pyplot as plt
 import pandas as pd
 from scipy import interpolate
-from matplotlib.lines import Line2D
 import multiprocessing as mp
 from multiprocessing import Pool
+import tqdm
+
+from matplotlib.lines import Line2D
+from matplotlib import pyplot as plt
 
 class environment:
     def __init__(self, sources):
@@ -24,7 +26,7 @@ class environment:
 
         self.c = 1500 # m/s
         
-        self.time_length = 3600 #30 min
+        self.time_length = 60 #1 min
         self.t = np.arange(0,self.time_length, 1/self.Fs)
         self.nodeA = (-1500, 0)
         self.nodeB = (1500, 0)
@@ -98,6 +100,9 @@ class environment:
             xA += xA_single
             xB += xB_single
             #print(f'{index/len(sources)*100:0.3}', end='\r')
+
+            print('.', end='')
+        #print(mp.current_process().pid)
         return xA, xB
 
     def __get_radius(self, coord):
@@ -130,10 +135,18 @@ class environment:
         #chunks = [sources.ix[sources.index[i:i + chunk_size]] for i in range(0, sources.shape[0],chunk_size)]
         chunks = [sources.iloc[i:i + chunk_size,:] for i in range(0, sources.shape[0], chunk_size)]
 
-        # create pool with 'num_processes' processes
-        pool = mp.Pool(processes = num_processes)
-        result = pool.map(self.get_signals_1cpu, chunks)
-        pool.close()
+        # TQDM
+        '''
+        with mp.Pool(num_processes) as p:
+            result = list(tqdm.tqdm(p.imap(self.get_signals_1cpu, chunks), total=len(sources)))
+        '''
+
+        # Original Method
+        self.count = 0
+        Pool = mp.Pool(processes = num_processes)
+        result = Pool.map(self.get_signals_1cpu, chunks)
+        Pool.close()
+
         # Unpack result
         xA = np.zeros(self.t.shape)
         xB = np.zeros(self.t.shape)
