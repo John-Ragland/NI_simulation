@@ -10,7 +10,7 @@ from matplotlib.lines import Line2D
 from matplotlib import pyplot as plt
 
 class environment:
-    def __init__(self, sources):
+    def __init__(self, sources, time_length=60):
         '''
         initialize environment variable
         Parameters
@@ -26,7 +26,7 @@ class environment:
 
         self.c = 1500 # m/s
         
-        self.time_length = 60 #1 min
+        self.time_length = time_length
         self.t = np.arange(0,self.time_length, 1/self.Fs)
         self.nodeA = (-1500, 0)
         self.nodeB = (1500, 0)
@@ -101,7 +101,7 @@ class environment:
             xB += xB_single
             #print(f'{index/len(sources)*100:0.3}', end='\r')
 
-            print('.', end='')
+            #print('.', end='')
         #print(mp.current_process().pid)
         return xA, xB
 
@@ -193,7 +193,7 @@ class environment:
         ax.set_ylabel('Distance (m)')
         return fig, ax
 
-class source_distribution:
+class source_distribution2D:
     def __init__(self):
         pass
 
