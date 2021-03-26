@@ -6,9 +6,9 @@ from scipy import interpolate
 import sys
 
 # create sources
-sources = ni_sim.source_distribution2D().endfire_circle(10, 10000, 200)
+sources = ni_sim.source_distribution2D().endfire_circle(10, 10000, 1000)
 
-env = ni_sim.environment(sources, time_length=600)
+env = ni_sim.environment(sources, time_length=100)
 
 xA, xB = env.get_signals()
 
@@ -18,4 +18,6 @@ tx = np.linspace(-env.time_length, env.time_length, len(xA))
 plt.plot(tx,xA)
 plt.show()
 
+print(type(R))
+print(R.shape)
 sys.exit()

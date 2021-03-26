@@ -1,10 +1,15 @@
+from typing import Counter
 import numpy as np
+from numpy.core.numeric import outer
 import scipy
 import pandas as pd
 from scipy import interpolate
 import multiprocessing as mp
 from multiprocessing import Pool
 import tqdm
+from scipy.io import wavfile
+import scipy.io
+from scipy import signal
 
 from matplotlib.lines import Line2D
 from matplotlib import pyplot as plt
@@ -72,20 +77,45 @@ class environment:
         xB = np.zeros(self.t.shape)
         for index, source in self.sources.iterrows():
             coord = (source.X, source.Y)
-            rA, rB = self.__get_radius(coord)
             
-            # Generate instance of gaussian noise N(0,1)
-            noise = np.random.normal(0,1,len(self.t))
-
-            # create interpolation
-            f = interpolate.interp1d(self.t, noise, kind='cubic', bounds_error=False)
-
+            # get radius and time shift
+            rA, rB = self.__get_radius(coord)
             dt_A = rA/self.c
             dt_B = rB/self.c
+            if source.label == 'gauss':
+                # Generate instance of gaussian noise N(0,1)
+                noise = np.random.normal(0,1,len(self.t))
+                
+                # create interpolation
+                f = interpolate.interp1d(self.t, noise, kind='cubic', bounds_error=False)
+                
+                # interpolate time shift
+                xA_single = f(self.t - dt_A)/(rA**2)
+                xB_single = f(self.t - dt_B)/(rB**2)
+           
+            elif source.label == 'sin':
+                boost = 1
+                xA_single = boost*np.sin(2*np.pi*20*(self.t-dt_A))/(rA**2)
+                xB_single = boost*np.sin(2*np.pi*20*(self.t-dt_B))/(rA**2)
+            
+            elif source.label == 'fin':
+                boost = 120
 
-            # interpolate time shift
-            xA_single = f(self.t - dt_A)/(rA**2)
-            xB_single = f(self.t - dt_B)/(rB**2)
+                # read fin wav file and convert to Fs = 200Hz
+                _, fin = wavfile.read('./atlfin_128_64_0-50-FinWhaleAtlantic-10x.wav')
+                fin = fin/np.max(fin)
+                fin200 = signal.decimate(fin, 4, zero_phase=True)
+
+                # repeat in time to match time_length
+                if len(self.t)/len(fin200) < 1:
+                    fin_expanded = fin200[:len(self.t)]
+                else:
+                    fin_expanded = np.tile(fin200, (np.round(len(self.t)/len(fin200),)))[:len(self.t)]
+                f = interpolate.interp1d(self.t, fin_expanded, kind='cubic', bounds_error=False)
+                xA_single = boost*f(self.t - dt_A)/(rA**2)
+                xB_single = boost*f(self.t - dt_B)/(rB**2)
+            else:
+                raise Exception('Invalid source label')
 
             # remove spherical spreading if radius < 1 m
             if rA < 1:
@@ -127,10 +157,8 @@ class environment:
     def get_signals(self):
         sources = self.sources
         num_processes = mp.cpu_count()
-
         # calculate the chuck size as an integer
-        chunk_size = int(sources.shape[0]/(num_processes-1))
-
+        chunk_size = int(sources.shape[0]/(num_processes))
         # Divide dataframe up into num_processes chunks
         #chunks = [sources.ix[sources.index[i:i + chunk_size]] for i in range(0, sources.shape[0],chunk_size)]
         chunks = [sources.iloc[i:i + chunk_size,:] for i in range(0, sources.shape[0], chunk_size)]
@@ -141,18 +169,27 @@ class environment:
             result = list(tqdm.tqdm(p.imap(self.get_signals_1cpu, chunks), total=len(sources)))
         '''
 
+        '''
+        results = []
+        with Pool(processes=2) as p:
+            max_ = 30
+            with tqdm.tqdm(total=max_) as pbar:
+                for i, result in enumerate(p.imap_unordered(self.get_signals_1cpu, chunks, chunksize=chunk_size)):
+                    pbar.update()
+                    results.append(result)
+        '''
+
         # Original Method
-        self.count = 0
         Pool = mp.Pool(processes = num_processes)
-        result = Pool.map(self.get_signals_1cpu, chunks)
-        Pool.close()
+        counter = 0
+        results = Pool.map(self.get_signals_1cpu, chunks)
 
         # Unpack result
         xA = np.zeros(self.t.shape)
         xB = np.zeros(self.t.shape)
         for k in range(num_processes):
-            xA += result[k][0]
-            xB += result[k][1]
+            xA += results[k][0]
+            xB += results[k][1]
        
         return xA, xB
 
@@ -176,21 +213,39 @@ class environment:
         return[xA_single, xB_single]
 
     def plot_env(self):
-        sources_x = self.sources.X.to_numpy()
-        sources_y = self.sources.Y.to_numpy()
+        noise_sources_x = self.sources[self.sources.label == 'gauss'].X.to_numpy()
+        noise_sources_y = self.sources[self.sources.label == 'gauss'].Y.to_numpy()
+        
+        sin_sources_x = self.sources[self.sources.label == 'fin'].X.to_numpy()
+        sin_sources_y = self.sources[self.sources.label == 'fin'].Y.to_numpy()
 
         fig, ax = plt.subplots(1,1, figsize=(7,7))
-        ax.plot(sources_x, sources_y, '.')
+        # Plot Gaussian Noise Sources
+        ax.plot(noise_sources_x, noise_sources_y, '.')
 
+        # Plot Sine Noise Sources
+        ax.plot(sin_sources_x, sin_sources_y, '.', color = 'C1', markersize=15)
+
+        # Plot hydrophones
         ax.plot(self.nodeA[0], self.nodeA[1], '.', color = 'r', markersize=20)
         ax.plot(self.nodeB[0], self.nodeB[1], '.', color = 'r', markersize=20)
 
         leg_elements = [
-            Line2D([0],[0], marker='o', color='w', label='Sources',markerfacecolor='C0', markersize=10),
-            Line2D([0],[0], marker='o', color='w', label='Hydrophone Nodes', markerfacecolor='r', markersize=10)]
+            Line2D(
+                [0],[0], marker='o', color='w', label='Sources',
+                markerfacecolor='C0', markersize=10),
+            Line2D(
+                [0],[0], marker='o', color='w', label='Hydrophone Nodes',
+                markerfacecolor='r', markersize=10),
+            Line2D(
+                [0],[0], marker='o', color='w', label='Fin Whale Source',
+                markerfacecolor='C1', markersize=10)
+        ]
+        
         ax.legend(handles=leg_elements, loc='upper right', fontsize=16)
         ax.set_xlabel('Distance (m)')
         ax.set_ylabel('Distance (m)')
+        plt.grid()
         return fig, ax
 
 class source_distribution2D:
@@ -221,11 +276,12 @@ class source_distribution2D:
 
         x_coord = radius*np.cos(thetas) + center[0]
         y_coord = radius*np.sin(thetas) + center[1]
+        
+        labels = ['gauss']*len(x_coord)
+        sources_dict = {'X':x_coord, 'Y':y_coord, 'label':labels}
+        self.sources = pd.DataFrame(sources_dict)
 
-        sources_dict = {'X':x_coord, 'Y':y_coord}
-        sources = pd.DataFrame(sources_dict)
-
-        return sources
+        return self.sources
 
     def uniform(self, x_bound, y_bound, n_sources):
         '''
@@ -248,11 +304,12 @@ class source_distribution2D:
         '''
         x = np.random.uniform(-x_bound, x_bound, n_sources)
         y = np.random.uniform(-y_bound, y_bound, n_sources)
+        labels = ['gauss']*len(x)
 
-        sources_dict = {'X':x, 'Y':y}
-        sources = pd.DataFrame(sources_dict)
+        sources_dict = {'X':x, 'Y':y, 'label':labels}
+        self.sources = pd.DataFrame(sources_dict)
 
-        return sources
+        return self.sources
     
     def endfire_circle(self, deg_bound, radius, n_sources):
         thetas1 = np.linspace(-np.deg2rad(deg_bound), np.deg2rad(deg_bound), int(n_sources/2))
@@ -264,26 +321,58 @@ class source_distribution2D:
         y_coord = radius*np.sin(thetas1)
         y_coord = np.hstack((y_coord, radius*np.sin(thetas2)))
 
-        sources_dict = {'X':x_coord, 'Y':y_coord}
-        sources = pd.DataFrame(sources_dict)
+        labels = ['gauss']*len(x_coord)
 
-        return sources
+        sources_dict = {'X':x_coord, 'Y':y_coord, 'label':labels}
+        self.sources = pd.DataFrame(sources_dict)
 
-    def distant_uniform(self, inner_radius, x_bound, y_bound, n_sources):
+        return self.sources
+
+    def distant_uniform(self, inner_radius, outer_radius, n_sources):
         
         x_coord = []
         y_coord = []
 
         while len(x_coord) < n_sources:
-            x = np.random.uniform(-x_bound, x_bound, 1)
-            y = np.random.uniform(-y_bound, y_bound, 1)
+            x = np.random.uniform(-outer_radius, outer_radius, 1)
+            y = np.random.uniform(-outer_radius, outer_radius, 1)
 
-            if (x**2 + y**2)**0.5 < inner_radius:
+            if ((x**2 + y**2)**0.5 < inner_radius) | ((x**2 + y**2)**0.5 > outer_radius):
                 pass
             else:
                 x_coord.append(x)
                 y_coord.append(y)
         
-        sources_dict = {'X':x_coord, 'Y':y_coord}
-        sources = pd.DataFrame(sources_dict)
-        return sources
+        labels = ['gauss']*len(x_coord)
+        sources_dict = {'X':x_coord, 'Y':y_coord, 'label':labels}
+        self.sources = pd.DataFrame(sources_dict)
+        return self.sources
+
+    def add_sine_sources(self):
+        '''
+        adds sources with 20 Hz sine wave sources
+        '''
+        # Check if noise sources exists
+        try:
+            self.sources
+        except AttributeError:
+            raise Exception('create noise source distribution first')
+
+        sine_sources = {'X':-10000, 'Y':0, 'label':'sin'}
+        self.sources = self.sources.append(sine_sources, ignore_index=True)
+
+    def add_fin_sources(self):
+        '''
+        adds sources with 20 Hz sine wave sources
+        '''
+        # Check if noise sources exists
+        try:
+            self.sources
+        except AttributeError:
+            raise Exception('create noise source distribution first')
+
+        sine_sources = {'X':-12000, 'Y':0, 'label':'fin'}
+        self.sources = self.sources.append(sine_sources, ignore_index=True)
+
+        
+        
