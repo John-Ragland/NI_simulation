@@ -157,40 +157,43 @@ class environment:
     def get_signals(self):
         sources = self.sources
         num_processes = mp.cpu_count()
-        # calculate the chuck size as an integer
-        chunk_size = int(sources.shape[0]/(num_processes))
-        # Divide dataframe up into num_processes chunks
-        #chunks = [sources.ix[sources.index[i:i + chunk_size]] for i in range(0, sources.shape[0],chunk_size)]
-        chunks = [sources.iloc[i:i + chunk_size,:] for i in range(0, sources.shape[0], chunk_size)]
+        if len(sources) < num_processes:
+            xA, xB = self.get_signals_1cpu(sources)
+        else:
+            # calculate the chuck size as an integer
+            chunk_size = int(sources.shape[0]/(num_processes))
+            # Divide dataframe up into num_processes chunks
+            #chunks = [sources.ix[sources.index[i:i + chunk_size]] for i in range(0, sources.shape[0],chunk_size)]
+            chunks = [sources.iloc[i:i + chunk_size,:] for i in range(0, sources.shape[0], chunk_size)]
 
-        # TQDM
-        '''
-        with mp.Pool(num_processes) as p:
-            result = list(tqdm.tqdm(p.imap(self.get_signals_1cpu, chunks), total=len(sources)))
-        '''
+            # TQDM
+            '''
+            with mp.Pool(num_processes) as p:
+                result = list(tqdm.tqdm(p.imap(self.get_signals_1cpu, chunks), total=len(sources)))
+            '''
 
-        '''
-        results = []
-        with Pool(processes=2) as p:
-            max_ = 30
-            with tqdm.tqdm(total=max_) as pbar:
-                for i, result in enumerate(p.imap_unordered(self.get_signals_1cpu, chunks, chunksize=chunk_size)):
-                    pbar.update()
-                    results.append(result)
-        '''
+            '''
+            results = []
+            with Pool(processes=2) as p:
+                max_ = 30
+                with tqdm.tqdm(total=max_) as pbar:
+                    for i, result in enumerate(p.imap_unordered(self.get_signals_1cpu, chunks, chunksize=chunk_size)):
+                        pbar.update()
+                        results.append(result)
+            '''
 
-        # Original Method
-        Pool = mp.Pool(processes = num_processes)
-        counter = 0
-        results = Pool.map(self.get_signals_1cpu, chunks)
+            # Original Method
+            Pool = mp.Pool(processes = num_processes)
+            counter = 0
+            results = Pool.map(self.get_signals_1cpu, chunks)
 
-        # Unpack result
-        xA = np.zeros(self.t.shape)
-        xB = np.zeros(self.t.shape)
-        for k in range(num_processes):
-            xA += results[k][0]
-            xB += results[k][1]
-       
+            # Unpack result
+            xA = np.zeros(self.t.shape)
+            xB = np.zeros(self.t.shape)
+            for k in range(num_processes):
+                xA += results[k][0]
+                xB += results[k][1]
+        
         return xA, xB
 
     def get_signal_mp(self, x, y):
