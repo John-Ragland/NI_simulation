@@ -114,6 +114,30 @@ class environment:
                 f = interpolate.interp1d(self.t, fin_expanded, kind='cubic', bounds_error=False)
                 xA_single = boost*f(self.t - dt_A)/(rA**2)
                 xB_single = boost*f(self.t - dt_B)/(rB**2)
+            
+            elif source.label == 'fin_model':
+                boost = 1.5 # boosts signal by factor
+                
+                # Fin Whale Model Attributes
+                dt = 0.3
+                f0 = 25
+                f1 = 15
+                T = 20
+                decay = -1
+                
+                # create time sequence
+                t = np.arange(0,dt,1/200)
+                win = np.exp(t*decay)
+                chirp = signal.chirp(t,f0,dt,f1)*win
+
+                chirp_padded = np.zeros(T*200)
+                chirp_padded[:len(chirp)] = chirp
+                n_tile = int(self.time_length*200/len(chirp_padded))
+                chirp_extended = np.tile(chirp_padded, n_tile)
+                f = interpolate.interp1d(self.t, chirp_extended, kind='cubic', bounds_error=False)
+                xA_single = boost*f(self.t - dt_A)/(rA**2)
+                xB_single = boost*f(self.t - dt_B)/(rB**2)
+
             else:
                 raise Exception('Invalid source label')
 
@@ -193,7 +217,9 @@ class environment:
             for k in range(num_processes):
                 xA += results[k][0]
                 xB += results[k][1]
-        
+        self.xA = xA
+        self.xB = xB
+        self.t_nccf = np.linspace(-self.time_length, self.time_length, len(xA)*2-1)
         return xA, xB
 
     def get_signal_mp(self, x, y):
@@ -219,8 +245,8 @@ class environment:
         noise_sources_x = self.sources[self.sources.label == 'gauss'].X.to_numpy()
         noise_sources_y = self.sources[self.sources.label == 'gauss'].Y.to_numpy()
         
-        sin_sources_x = self.sources[self.sources.label == 'fin'].X.to_numpy()
-        sin_sources_y = self.sources[self.sources.label == 'fin'].Y.to_numpy()
+        sin_sources_x = self.sources[(self.sources.label == 'fin_model') | (self.sources.label == 'fin')].X.to_numpy()
+        sin_sources_y = self.sources[(self.sources.label == 'fin_model') | (self.sources.label == 'fin')].Y.to_numpy()
 
         fig, ax = plt.subplots(1,1, figsize=(7,7))
         # Plot Gaussian Noise Sources
@@ -245,11 +271,28 @@ class environment:
                 markerfacecolor='C1', markersize=10)
         ]
         
-        ax.legend(handles=leg_elements, loc='upper right', fontsize=16)
+        ax.legend(handles=leg_elements, loc='lower right', fontsize=16)
         ax.set_xlabel('Distance (m)')
         ax.set_ylabel('Distance (m)')
         plt.grid()
         return fig, ax
+
+    def correlate(self):
+        '''
+        computes noise cross correlation function for generated signals xA and
+            xB
+        
+        Returns
+        -------
+        NCCF : numpy array
+            noise cross correlation function
+        '''
+    
+        xA = self.xA
+        xB = self.xB
+        NCCF = signal.fftconvolve(xA, np.flip(xB), mode='full')
+
+        return NCCF
 
 class source_distribution2D:
     def __init__(self):
@@ -351,9 +394,19 @@ class source_distribution2D:
         self.sources = pd.DataFrame(sources_dict)
         return self.sources
 
-    def add_sine_sources(self):
+    def add_custom_sources(self, label):
         '''
         adds sources with 20 Hz sine wave sources
+        Parameters
+        ----------
+        label : str
+            - 'sin'
+            - 'fin'
+            - 'model_fin'
+        
+        Returns
+        -------
+        Updates Source Class
         '''
         # Check if noise sources exists
         try:
@@ -361,21 +414,18 @@ class source_distribution2D:
         except AttributeError:
             raise Exception('create noise source distribution first')
 
-        sine_sources = {'X':-10000, 'Y':0, 'label':'sin'}
+        sine_sources = {'X':-12000, 'Y':0, 'label':label}
         self.sources = self.sources.append(sine_sources, ignore_index=True)
 
-    def add_fin_sources(self):
-        '''
-        adds sources with 20 Hz sine wave sources
-        '''
-        # Check if noise sources exists
-        try:
-            self.sources
-        except AttributeError:
-            raise Exception('create noise source distribution first')
+    def fin_whale_dist(self, inner_radius, outer_radius, deg_bound, n_sources, deg=180):
 
-        sine_sources = {'X':-12000, 'Y':0, 'label':'fin'}
-        self.sources = self.sources.append(sine_sources, ignore_index=True)
-
+        r = outer_radius*np.sqrt(np.random.uniform((inner_radius/outer_radius)**2, 1, n_sources))
+        theta = np.random.uniform(np.deg2rad(deg)-np.deg2rad(deg_bound), np.deg2rad(deg)+np.deg2rad(deg_bound), n_sources)
+        x = r*np.cos(theta)
+        y = r*np.sin(theta)       
         
+        labels = ['fin_model']*len(x)
+        sources_dict = {'X':x, 'Y':y, 'label':labels}
+        self.sources = self.sources.append(pd.DataFrame(sources_dict))
         
+        return self.sources
