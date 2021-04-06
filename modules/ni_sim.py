@@ -75,7 +75,7 @@ class environment:
         '''
         xA = np.zeros(self.t.shape)
         xB = np.zeros(self.t.shape)
-        for index, source in self.sources.iterrows():
+        for _, source in sources.iterrows():
             coord = (source.X, source.Y)
             
             # get radius and time shift
@@ -116,8 +116,7 @@ class environment:
                 xB_single = boost*f(self.t - dt_B)/(rB**2)
             
             elif source.label == 'fin_model':
-                boost = 1.5 # boosts signal by factor
-                
+                boost = 100 # boosts signal by factor
                 # Fin Whale Model Attributes
                 dt = 0.3
                 f0 = 25
@@ -178,8 +177,26 @@ class environment:
         rB = ((self.nodeB[0] - coord[0])**2 + (self.nodeB[1] - coord[1])**2)**0.5
         return rA, rB
 
-    def get_signals(self):
+    def get_signals(self, no_whale = False):
+        '''
+        generates recieved signal at node a and node b given the environment
+        Parameters
+        ----------
+        no_whale : bool
+            specifies whether or not to add whale contributions
+        
+        Returns
+        -------
+        xA : numpy array
+            time series of signal recieved at node A
+        xB : numpy array
+            time series of signal recieved at node B
+        '''
         sources = self.sources
+        # remove whale sources if no_whale
+        if no_whale:
+            sources = sources[sources.label == 'gauss']
+        
         num_processes = mp.cpu_count()
         if len(sources) < num_processes:
             xA, xB = self.get_signals_1cpu(sources)
@@ -219,6 +236,7 @@ class environment:
                 xB += results[k][1]
         self.xA = xA
         self.xB = xB
+
         self.t_nccf = np.linspace(-self.time_length, self.time_length, len(xA)*2-1)
         return xA, xB
 
@@ -277,22 +295,48 @@ class environment:
         plt.grid()
         return fig, ax
 
-    def correlate(self):
+    def correlate(self, whale=False):
         '''
         computes noise cross correlation function for generated signals xA and
             xB
-        
+        Parameters
+        ----------
+        whale : bool
+            specifies whether to correlate self.xA and self.sB or self.xA_whale and self.xB_whale
         Returns
         -------
         NCCF : numpy array
             noise cross correlation function
         '''
-    
-        xA = self.xA
-        xB = self.xB
+        if whale:
+            xA = self.xA_whale
+            xB = self.xB_whale
+        else:
+            xA = self.xA
+            xB = self. xB
         NCCF = signal.fftconvolve(xA, np.flip(xB), mode='full')
 
         return NCCF
+
+    def add_whale_signals(self):
+        '''
+        takes noise signals generated with get_signals(no_whale=True) and adds
+            whale signals. This accomplished multiple whale experiements with
+            all other variables remaining constant
+        '''
+        # check if object state is correct
+        try:
+            self.xA_whale
+            raise Exception('Must get noise signals first without whale, run method get_signals(no_whale=True)')
+        except:
+            pass
+        
+        # add whale signals
+        sources = self.sources[self.sources.label != 'gauss']
+        xA_justwhale, xB_justwhale = self.get_signals_1cpu(sources)
+        self.xA_whale = self.xA + xA_justwhale
+        self.xB_whale = self.xB + xB_justwhale
+        return self.xA_whale, self.xB_whale
 
 class source_distribution2D:
     def __init__(self):
@@ -394,7 +438,7 @@ class source_distribution2D:
         self.sources = pd.DataFrame(sources_dict)
         return self.sources
 
-    def add_custom_sources(self, label):
+    def add_custom_sources(self, label, coord):
         '''
         adds sources with 20 Hz sine wave sources
         Parameters
@@ -403,7 +447,8 @@ class source_distribution2D:
             - 'sin'
             - 'fin'
             - 'model_fin'
-        
+        coord : tuple
+            (r,θ) coordinate of source (in meters and degrees)
         Returns
         -------
         Updates Source Class
@@ -413,8 +458,9 @@ class source_distribution2D:
             self.sources
         except AttributeError:
             raise Exception('create noise source distribution first')
-
-        sine_sources = {'X':-12000, 'Y':0, 'label':label}
+        x = coord[0]*np.cos(np.deg2rad(coord[1]))
+        y = coord[0]*np.sin(np.deg2rad(coord[1]))
+        sine_sources = {'X':x, 'Y':y, 'label':label}
         self.sources = self.sources.append(sine_sources, ignore_index=True)
 
     def fin_whale_dist(self, inner_radius, outer_radius, deg_bound, n_sources, deg=180):
