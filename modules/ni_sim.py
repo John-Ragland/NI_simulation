@@ -116,7 +116,7 @@ class environment:
                 xB_single = boost*f(self.t - dt_B)/(rB**2)
             
             elif source.label == 'fin_model':
-                boost = 100 # boosts signal by factor
+                boost = 75 # boosts signal by factor
                 # Fin Whale Model Attributes
                 dt = 0.3
                 f0 = 25
@@ -198,7 +198,8 @@ class environment:
             sources = sources[sources.label == 'gauss']
         
         num_processes = mp.cpu_count()
-        if len(sources) < num_processes:
+        #if len(sources) < num_processes:
+        if True:
             xA, xB = self.get_signals_1cpu(sources)
         else:
             # calculate the chuck size as an integer
@@ -318,11 +319,15 @@ class environment:
 
         return NCCF
 
-    def add_whale_signals(self):
+    def add_whale_signals(self, whale_sources):
         '''
         takes noise signals generated with get_signals(no_whale=True) and adds
             whale signals. This accomplished multiple whale experiements with
             all other variables remaining constant
+        Parameters
+        ----------
+        whale_sources : pandas DataFrame
+            a seperately created data frame for the whale distribution
         '''
         # check if object state is correct
         try:
@@ -332,8 +337,7 @@ class environment:
             pass
         
         # add whale signals
-        sources = self.sources[self.sources.label != 'gauss']
-        xA_justwhale, xB_justwhale = self.get_signals_1cpu(sources)
+        xA_justwhale, xB_justwhale = self.get_signals_1cpu(whale_sources)
         self.xA_whale = self.xA + xA_justwhale
         self.xB_whale = self.xB + xB_justwhale
         return self.xA_whale, self.xB_whale
@@ -456,12 +460,20 @@ class source_distribution2D:
         # Check if noise sources exists
         try:
             self.sources
+            first_source = False
         except AttributeError:
-            raise Exception('create noise source distribution first')
+            first_source = True
+        
         x = coord[0]*np.cos(np.deg2rad(coord[1]))
         y = coord[0]*np.sin(np.deg2rad(coord[1]))
-        sine_sources = {'X':x, 'Y':y, 'label':label}
-        self.sources = self.sources.append(sine_sources, ignore_index=True)
+        
+        
+        if first_source:
+            sine_sources = {'X':[x], 'Y':[y], 'label':label}
+            self.sources = pd.DataFrame(sine_sources)
+        else:
+            sine_sources = {'X':x, 'Y':y, 'label':label}
+            self.sources = self.sources.append(sine_sources, ignore_index=True)
 
     def fin_whale_dist(self, inner_radius, outer_radius, deg_bound, n_sources, deg=180):
 
