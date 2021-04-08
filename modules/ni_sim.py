@@ -56,7 +56,7 @@ class environment:
         x = 1/(r**2)*np.exp(-((self.t-r/self.c)**2)/(2*self.sigma)**2)*np.exp(1j*self.w0*(self.t-r/self.c))
         return x
 
-    def get_signals_1cpu(self, sources):
+    def get_signals_1cpu(self, sources, rng=np.random.RandomState(0)):
         '''
         get_signals calculated the time domain recieved signal at node A and B
             for a given source distribution
@@ -84,7 +84,7 @@ class environment:
             dt_B = rB/self.c
             if source.label == 'gauss':
                 # Generate instance of gaussian noise N(0,1)
-                noise = np.random.normal(0,1,len(self.t))
+                noise = rng.randn(len(self.t))
                 
                 # create interpolation
                 f = interpolate.interp1d(self.t, noise, kind='cubic', bounds_error=False)
@@ -198,15 +198,19 @@ class environment:
             sources = sources[sources.label == 'gauss']
         
         num_processes = mp.cpu_count()
-        #if len(sources) < num_processes:
-        if True:
+        if len(sources) < num_processes:
             xA, xB = self.get_signals_1cpu(sources)
         else:
             # calculate the chuck size as an integer
             chunk_size = int(sources.shape[0]/(num_processes))
             # Divide dataframe up into num_processes chunks
-            #chunks = [sources.ix[sources.index[i:i + chunk_size]] for i in range(0, sources.shape[0],chunk_size)]
             chunks = [sources.iloc[i:i + chunk_size,:] for i in range(0, sources.shape[0], chunk_size)]
+            rngs = [np.random.RandomState(i) for i in range(num_processes)]
+            temp = len(chunks)
+            for k in range(num_processes, temp):
+                chunks[num_processes-1] = chunks[num_processes-1].append(chunks[k])
+
+            del chunks[num_processes:]
 
             # TQDM
             '''
@@ -227,12 +231,11 @@ class environment:
             # Original Method
             Pool = mp.Pool(processes = num_processes)
             counter = 0
-            results = Pool.map(self.get_signals_1cpu, chunks)
-
+            results = Pool.starmap(self.get_signals_1cpu, zip(chunks, rngs)) # change back to chunks
             # Unpack result
             xA = np.zeros(self.t.shape)
             xB = np.zeros(self.t.shape)
-            for k in range(num_processes):
+            for k in range(num_processes-2):
                 xA += results[k][0]
                 xB += results[k][1]
         self.xA = xA
