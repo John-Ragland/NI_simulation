@@ -10,6 +10,7 @@ import tqdm
 from scipy.io import wavfile
 import scipy.io
 from scipy import signal
+import xarray as xr
 
 from matplotlib.lines import Line2D
 from matplotlib import pyplot as plt
@@ -37,24 +38,6 @@ class environment:
         self.nodeB = (1500, 0)
 
         self.sources = sources
-
-    def __get_time_signal(self, r):
-        '''
-        get_time_signal constructs time signal for a single hydrophone and
-            single source. These signals can then be superimposed for multiple
-            sources and one hydrophone
-        Parameters
-        ----------
-        r : float
-            distance between given source and hydrophone
-        
-        Returns
-        -------
-        x : numpy array
-            sampled signal for single source reciever pair
-        '''
-        x = 1/(r**2)*np.exp(-((self.t-r/self.c)**2)/(2*self.sigma)**2)*np.exp(1j*self.w0*(self.t-r/self.c))
-        return x
 
     def get_signals_1cpu(self, sources, rng=np.random.RandomState(0)):
         '''
@@ -116,7 +99,7 @@ class environment:
                 xB_single = boost*f(self.t - dt_B)/(rB**2)
             
             elif source.label == 'fin_model':
-                boost = 75 # boosts signal by factor
+                boost = 3 # boosts signal by factor
                 # Fin Whale Model Attributes
                 dt = 0.3
                 f0 = 25
@@ -177,7 +160,7 @@ class environment:
         rB = ((self.nodeB[0] - coord[0])**2 + (self.nodeB[1] - coord[1])**2)**0.5
         return rA, rB
 
-    def get_signals(self, no_whale = False):
+    def get_signals(self, no_whale = False, whale_sources=None):
         '''
         generates recieved signal at node a and node b given the environment
         Parameters
@@ -196,7 +179,6 @@ class environment:
         # remove whale sources if no_whale
         if no_whale:
             sources = sources[sources.label == 'gauss']
-        
         num_processes = mp.cpu_count()
         if len(sources) < num_processes:
             xA, xB = self.get_signals_1cpu(sources)
@@ -244,31 +226,49 @@ class environment:
         self.t_nccf = np.linspace(-self.time_length, self.time_length, len(xA)*2-1)
         return xA, xB
 
-    def get_signal_mp(self, x, y):
+    def add_incoherent(self, to_xA=True, to_xB=True, scale=1):
+        
+        if to_xA:
+            self.xA += scale*np.random.normal(0, 1, len(self.xA))
+        if to_xB:
+            self.xB += scale*np.random.normal(0, 1, len(self.xB))
+
+        return self.xA, self.xB
+
+    def add_filtered_incoherent(self, b, a, to_xA=True, to_xB=True, scale=1):
         '''
-        get_signal_mp executes contents of what was a for loop using
-            multiprocessing
+        add filtered incoherent noise to xa, xb or both
         Parameters
         ----------
-        source : pandas.DataFrame single row
-            contains (x,y) cooridinates of source in meters
-    
-        Returns
-        -------
-
+        b : np.array
+            filter numerator coefficients
+        a : np.array
+            filter denominator coefficients
         '''
-        coord = (x, y)
-        rA, rB = self.__get_radius(coord)
-        xA_single, xB_single = self.__get_time_signals_guassian(rA, rB)
-
-        return[xA_single, xB_single]
-
-    def plot_env(self):
-        noise_sources_x = self.sources[self.sources.label == 'gauss'].X.to_numpy()
-        noise_sources_y = self.sources[self.sources.label == 'gauss'].Y.to_numpy()
         
-        sin_sources_x = self.sources[(self.sources.label == 'fin_model') | (self.sources.label == 'fin')].X.to_numpy()
-        sin_sources_y = self.sources[(self.sources.label == 'fin_model') | (self.sources.label == 'fin')].Y.to_numpy()
+        if to_xA:
+            noise = np.random.normal(0, scale, len(self.xA))
+            noise = signal.lfilter(b,a,noise)
+            self.xA += scale * noise
+        if to_xB:
+            noise = np.random.normal(0, scale, len(self.xB))
+            noise = signal.lfilter(b,a,noise)
+            self.xB += scale * noise
+
+        return self.xA, self.xB
+
+    def plot_env(self, whale_sources=None):
+        try:
+            (whale_sources == None)
+            all_sources = self.sources.append(whale_sources)
+        except:
+            pass
+        
+        noise_sources_x = all_sources[all_sources.label == 'gauss'].X.to_numpy()
+        noise_sources_y = all_sources[all_sources.label == 'gauss'].Y.to_numpy()
+        
+        sin_sources_x = all_sources[(all_sources.label == 'fin_model') | (all_sources.label == 'fin')].X.to_numpy()
+        sin_sources_y = all_sources[(all_sources.label == 'fin_model') | (all_sources.label == 'fin')].Y.to_numpy()
 
         fig, ax = plt.subplots(1,1, figsize=(7,7))
         # Plot Gaussian Noise Sources
@@ -299,7 +299,7 @@ class environment:
         plt.grid()
         return fig, ax
 
-    def correlate(self, whale=False):
+    def correlate(self, whale=False, just_whale=False, plot=False):
         '''
         computes noise cross correlation function for generated signals xA and
             xB
@@ -317,10 +317,28 @@ class environment:
             xB = self.xB_whale
         else:
             xA = self.xA
-            xB = self. xB
+            xB = self.xB
         NCCF = signal.fftconvolve(xA, np.flip(xB), mode='full')
 
+        if just_whale:
+            xA = self.xA_whale - self.xA
+            xB = self.xB_whale - self.xB
+
+        self.NCCF = NCCF
+        if plot:
+            fig = plt.figure(figsize=(7,5))
+            plt.plot(self.t_nccf, NCCF)
+            plt.xlim([-5,5])
+            plt.xlabel('delay (s)')
+            plt.grid()
+            return NCCF, fig
         return NCCF
+
+    def spectrogram(self):
+        f, t, Sxx = signal.spectrogram(self.NCCF, fs=200, nperseg=32, noverlap=31, nfft=256)
+        t = np.linspace(-self.time_length, self.time_length, len(t))
+        spec = xr.DataArray(Sxx, dims=['frequency','time'], coords={'frequency':f, 'time':t})
+        return spec
 
     def add_whale_signals(self, whale_sources):
         '''
@@ -343,7 +361,7 @@ class environment:
         xA_justwhale, xB_justwhale = self.get_signals_1cpu(whale_sources)
         self.xA_whale = self.xA + xA_justwhale
         self.xB_whale = self.xB + xB_justwhale
-        return self.xA_whale, self.xB_whale
+        return xA_justwhale, xB_justwhale
 
 class source_distribution2D:
     def __init__(self):
@@ -487,6 +505,9 @@ class source_distribution2D:
         
         labels = ['fin_model']*len(x)
         sources_dict = {'X':x, 'Y':y, 'label':labels}
-        self.sources = self.sources.append(pd.DataFrame(sources_dict))
+        try:
+            self.sources = self.sources.append(pd.DataFrame(sources_dict))
+        except:
+            self.sources = pd.DataFrame(sources_dict)
         
         return self.sources
