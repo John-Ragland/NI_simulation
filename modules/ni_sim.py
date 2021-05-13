@@ -73,13 +73,13 @@ class environment:
                 f = interpolate.interp1d(self.t, noise, kind='cubic', bounds_error=False)
                 
                 # interpolate time shift
-                xA_single = f(self.t - dt_A)/(rA**2)
-                xB_single = f(self.t - dt_B)/(rB**2)
+                xA_single = f(self.t - dt_A)/(rA)
+                xB_single = f(self.t - dt_B)/(rB)
            
             elif source.label == 'sin':
                 boost = 1
-                xA_single = boost*np.sin(2*np.pi*20*(self.t-dt_A))/(rA**2)
-                xB_single = boost*np.sin(2*np.pi*20*(self.t-dt_B))/(rA**2)
+                xA_single = boost*np.sin(2*np.pi*20*(self.t-dt_A))/(rA)
+                xB_single = boost*np.sin(2*np.pi*20*(self.t-dt_B))/(rA)
             
             elif source.label == 'fin':
                 boost = 120
@@ -93,23 +93,24 @@ class environment:
                 if len(self.t)/len(fin200) < 1:
                     fin_expanded = fin200[:len(self.t)]
                 else:
-                    fin_expanded = np.tile(fin200, (np.round(len(self.t)/len(fin200),)))[:len(self.t)]
+                    fin_expanded = np.tile(fin200, int(np.ceil(len(self.t)/len(fin200))))[:len(self.t)]
+
                 f = interpolate.interp1d(self.t, fin_expanded, kind='cubic', bounds_error=False)
-                xA_single = boost*f(self.t - dt_A)/(rA**2)
-                xB_single = boost*f(self.t - dt_B)/(rB**2)
+                xA_single = boost*f(self.t - dt_A)/(rA)
+                xB_single = boost*f(self.t - dt_B)/(rB)
             
             elif source.label == 'fin_model':
-                boost = 3 # boosts signal by factor
+                boost = 2 # boosts signal by factor
                 # Fin Whale Model Attributes
-                dt = 0.3
-                f0 = 25
+                dt = 1
+                f0 = 30
                 f1 = 15
                 T = 20
                 decay = -1
                 
                 # create time sequence
                 t = np.arange(0,dt,1/200)
-                win = np.exp(t*decay)
+                win = signal.windows.gaussian(len(t), 40)
                 chirp = signal.chirp(t,f0,dt,f1)*win
 
                 chirp_padded = np.zeros(T*200)
@@ -117,17 +118,17 @@ class environment:
                 n_tile = int(self.time_length*200/len(chirp_padded))
                 chirp_extended = np.tile(chirp_padded, n_tile)
                 f = interpolate.interp1d(self.t, chirp_extended, kind='cubic', bounds_error=False)
-                xA_single = boost*f(self.t - dt_A)/(rA**2)
-                xB_single = boost*f(self.t - dt_B)/(rB**2)
+                xA_single = boost*f(self.t - dt_A)/(rA)
+                xB_single = boost*f(self.t - dt_B)/(rB)
 
             else:
                 raise Exception('Invalid source label')
 
             # remove spherical spreading if radius < 1 m
             if rA < 1:
-                xA_single = xA_single*(rA**2)
+                xA_single = xA_single*(rA)
             if rB < 1:
-                xB_single = xB_single*(rB**2)
+                xB_single = xB_single*(rB)
 
             # remove nan
             xA_single[np.isnan(xA_single)] = 0
@@ -272,7 +273,7 @@ class environment:
 
         fig, ax = plt.subplots(1,1, figsize=(7,7))
         # Plot Gaussian Noise Sources
-        ax.plot(noise_sources_x, noise_sources_y, '.')
+        ax.plot(noise_sources_x, noise_sources_y, '.', color='C0')
 
         # Plot Sine Noise Sources
         ax.plot(sin_sources_x, sin_sources_y, '.', color = 'C1', markersize=15)
@@ -297,6 +298,8 @@ class environment:
         ax.set_xlabel('Distance (m)')
         ax.set_ylabel('Distance (m)')
         plt.grid()
+        plt.xlim([-15000, 15000])
+        plt.ylim([-15000, 15000])
         return fig, ax
 
     def correlate(self, whale=False, just_whale=False, plot=False):
@@ -330,7 +333,7 @@ class environment:
             plt.plot(self.t_nccf, NCCF)
             plt.xlim([-5,5])
             plt.xlabel('delay (s)')
-            plt.grid()
+            #plt.grid()
             return NCCF, fig
         return NCCF
 
@@ -444,7 +447,6 @@ class source_distribution2D:
         return self.sources
 
     def distant_uniform(self, inner_radius, outer_radius, n_sources):
-        
         x_coord = []
         y_coord = []
 
@@ -496,6 +498,8 @@ class source_distribution2D:
             sine_sources = {'X':x, 'Y':y, 'label':label}
             self.sources = self.sources.append(sine_sources, ignore_index=True)
 
+        return self.sources
+
     def fin_whale_dist(self, inner_radius, outer_radius, deg_bound, n_sources, deg=180):
 
         r = outer_radius*np.sqrt(np.random.uniform((inner_radius/outer_radius)**2, 1, n_sources))
@@ -511,3 +515,18 @@ class source_distribution2D:
             self.sources = pd.DataFrame(sources_dict)
         
         return self.sources
+
+    def remove_non_endfire(self, deg_bound):
+        sources = self.sources
+
+        mask = []
+        for index, row in sources.iterrows():
+            x = row.X
+            y = row.Y
+
+            mask.append(bool((np.abs(np.rad2deg(np.arctan2(y,x))) > deg_bound) & (np.abs(np.rad2deg(np.arctan2(y,x))) < 180-deg_bound)))
+        mask = pd.Series(mask)
+
+        sources = sources[~mask]
+        self.sources = sources
+        return sources
