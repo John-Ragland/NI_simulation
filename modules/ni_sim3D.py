@@ -42,40 +42,75 @@ class environment:
         self.depth = 1500 #m
         self.sources = sources
 
-    def plot_env(self, xlim=None, ylim=None):
+    def plot_env(self, xlim=None, ylim=None, type='both', ax=None):
+        '''
+        plot_env plot the environment that is being simulation
+
+        Parameters
+        ----------
+        xlim : tuple
+        ylim : tuple
+        type : str
+            "both" - creates subplot of side and top view
+            "side" - plots only side view
+        ax : matplotlib.ax
+            if included, it just adds the plot to specified axis. Default is None
+            (new axis is created). Currently only supported for 'side' type
+
+        '''
         sources_x = self.sources.X
         sources_y = self.sources.Y
         sources_z = self.sources.Z
 
-        fig, (ax1, ax2) = plt.subplots(1,2, figsize = (15,5))
+        if type == 'both':
+            fig, (ax1, ax2) = plt.subplots(1,2, figsize = (15,5))
 
-        ax1.plot(sources_x, sources_y, '.', color='green', markersize=15)
-        ax1.plot(self.nodeA[0], self.nodeA[1], '.', color='red', markersize=15)
-        ax1.plot(self.nodeB[0], self.nodeB[1], '.', color='red', markersize=15)
-        ax1.set_title('Top View')
-        ax1.set_xlabel('X (meters)')
-        ax1.set_ylabel('Y (meters)')
-        if xlim != None:
-            ax1.set_xlim(xlim)
-        if ylim != None:
-            ax1.set_ylim(ylim)
-        ax1.grid()
+            ax1.plot(sources_x, sources_y, '.', color='green', markersize=15)
+            ax1.plot(self.nodeA[0], self.nodeA[1], '.', color='red', markersize=15)
+            ax1.plot(self.nodeB[0], self.nodeB[1], '.', color='red', markersize=15)
+            ax1.set_title('Top View')
+            ax1.set_xlabel('X (meters)')
+            ax1.set_ylabel('Y (meters)')
+            if xlim != None:
+                ax1.set_xlim(xlim)
+            if ylim != None:
+                ax1.set_ylim(ylim)
+            ax1.grid()
 
-        ax2.plot(sources_x, sources_z, '.', color='green',markersize=15)
-        ax2.plot(self.nodeA[0], self.nodeA[2], '.', color='red', markersize=15)
-        ax2.plot(self.nodeB[0], self.nodeB[2], '.', color='red', markersize=15)
-        ax2.set_title('Side View')
-        ax2.set_xlabel('X (meters)')
-        ax2.set_ylabel('Z (meters)')
-        ax2.grid()
+            ax2.plot(sources_x, sources_z, '.', color='green',markersize=15)
+            ax2.plot(self.nodeA[0], self.nodeA[2], '.', color='red', markersize=15)
+            ax2.plot(self.nodeB[0], self.nodeB[2], '.', color='red', markersize=15)
+            ax2.set_title('Side View')
+            ax2.set_xlabel('X (meters)')
+            ax2.set_ylabel('Z (meters)')
+            ax2.grid()
 
-        if xlim != None:
-            ax2.set_xlim(xlim)
-            print('test')
+            if xlim != None:
+                ax2.set_xlim(xlim)
+                print('test')
 
-        xlim = ax2.get_xlim()
-        ax2.plot(xlim, [0,0], color='black')
-        ax2.plot(xlim, [self.depth, self.depth], color='blue')
+            xlim = ax2.get_xlim()
+            ax2.plot(xlim, [0,0], color='black')
+            ax2.plot(xlim, [self.depth, self.depth], color='blue')
+        
+        if type == 'side':
+            if ax == None:
+                fig, ax = plt.subplots(1,1, figsize = (5,5))
+            
+            ax.plot(sources_x, sources_z, '.', color='green',markersize=15)
+            ax.plot(self.nodeA[0], self.nodeA[2], '.', color='red', markersize=15)
+            ax.plot(self.nodeB[0], self.nodeB[2], '.', color='red', markersize=15)
+            ax.set_title('Side View')
+            ax.set_xlabel('X (meters)')
+            ax.set_ylabel('Z (meters)')
+            ax.grid()
+
+            if xlim != None:
+                ax.set_xlim(xlim)
+
+            xlim = ax.get_xlim()
+            ax.plot(xlim, [0,0], color='black')
+            ax.plot(xlim, [self.depth, self.depth], color='blue')
 
     def __get_radius(self, coord):
         '''
@@ -123,8 +158,24 @@ class environment:
         for _, source in sources.iterrows():
             coord = np.array([source.X, source.Y, source.Z])
             
-            # Generate instance of gaussian noise N(0,1)
-            noise = rng.randn(len(self.t))
+            # Generate source signal
+            if source.label == 'gauss':
+                signal = rng.randn(len(self.t)) # ~N(0,1)
+            elif source.label == 'fin_model':
+                boost = 1 # manually changeable term for mixing whale with other sources
+                dt = 1
+                f0 = 30
+                f1 = 15
+                T = 20
+                
+                win = signal.windows.gaussian(len(self.t), 40)
+                chirp = signal.chirp(self.t,f0,dt,f1)*win
+                chirp_padded = np.zeros(T*200)
+                chirp_padded[:len(chirp)] = chirp
+                n_tile = int(self.time_length*200/len(chirp_padded))
+                signal = np.tile(chirp_padded, n_tile)
+            else:
+                raise Exception('Iinvalid source label')
 
             # Loop through all reflections
             for k in range(num_reflections):
@@ -137,22 +188,19 @@ class environment:
                 rA, rB = self.__get_radius([source.X, source.Y, depth])
                 dt_A = rA/self.c
                 dt_B = rB/self.c
-                if source.label == 'gauss':
-                    # create interpolation
-                    f = interpolate.interp1d(self.t, noise, kind='cubic', bounds_error=False)
-                
-                    # interpolate time shift
-                    xA_single = f(self.t - dt_A)/(rA)
-                    xB_single = f(self.t - dt_B)/(rB)
-           
-                else:
-                    raise Exception('Invalid source label')
+ 
+                # create interpolation
+                f = interpolate.interp1d(self.t, signal, kind='cubic', bounds_error=False)
+            
+                # interpolate time shift
+                xA_single = f(self.t - dt_A)/(rA**2)
+                xB_single = f(self.t - dt_B)/(rB**2)
 
                 # remove spherical spreading if radius < 1 m
                 if rA < 1:
-                    xA_single = xA_single*(rA)
+                    xA_single = xA_single*(rA**2)
                 if rB < 1:
-                    xB_single = xB_single*(rB)
+                    xB_single = xB_single*(rB**2)
 
                 # remove nan
                 xA_single[np.isnan(xA_single)] = 0
@@ -209,7 +257,7 @@ class environment:
         self.t_nccf = np.linspace(-self.time_length, self.time_length, len(xA)*2-1)
         return xA, xB
 
-    def correlate(self, plot=False):
+    def correlate(self, plot=False, ax=None):
         '''
         computes noise cross correlation function for generated signals xA and
             xB
@@ -217,6 +265,8 @@ class environment:
         ----------
         plot : bool
             specifies whether to plot correlation
+        ax : matplotlib.axis
+            if specified, this axis is used
         Returns
         -------
         NCCF : numpy array
@@ -228,12 +278,12 @@ class environment:
 
         self.NCCF = NCCF
         if plot:
-            fig = plt.figure(figsize=(7,5))
-            plt.plot(self.t_nccf, NCCF)
-            plt.xlim([-10,10])
-            plt.xlabel('delay (s)')
-            #plt.grid()
-            return NCCF, fig
+            if ax == None:
+                fig, ax = plt.subplots(1,1,figsize=(7,5))
+            ax.plot(self.t_nccf, NCCF)
+            ax.set_xlim([-10,10])
+            ax.set_xlabel('delay (s)')
+            ax.grid()
         return NCCF
 
 
