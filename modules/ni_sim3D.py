@@ -87,7 +87,6 @@ class environment:
 
             if xlim != None:
                 ax2.set_xlim(xlim)
-                print('test')
 
             xlim = ax2.get_xlim()
             ax2.plot(xlim, [0,0], color='black')
@@ -158,22 +157,29 @@ class environment:
         for _, source in sources.iterrows():
             coord = np.array([source.X, source.Y, source.Z])
             
+            # set incoherent flag
+            if source.label == 'fin_incoherent':
+                incoherent = True
             # Generate source signal
             if source.label == 'gauss':
-                signal = rng.randn(len(self.t)) # ~N(0,1)
-            elif source.label == 'fin_model':
+                signals = rng.randn(len(self.t)) # ~N(0,1)
+            elif (source.label == 'fin_model') | (source.label == 'fin_incoherent'):
                 boost = 1 # manually changeable term for mixing whale with other sources
                 dt = 1
                 f0 = 30
                 f1 = 15
                 T = 20
                 
-                win = signal.windows.gaussian(len(self.t), 40)
-                chirp = signal.chirp(self.t,f0,dt,f1)*win
+                t = np.arange(0,dt,1/200)
+                win = signal.windows.gaussian(len(t), 40)
+                chirp = signal.chirp(t,f0,dt,f1)*win
                 chirp_padded = np.zeros(T*200)
-                chirp_padded[:len(chirp)] = chirp
+                
+                # place chirp randomly in T window
+                start_idx = np.random.randint(0,len(chirp_padded)-len(chirp)-1)
+                chirp_padded[start_idx:start_idx+len(chirp)] = chirp
                 n_tile = int(self.time_length*200/len(chirp_padded))
-                signal = np.tile(chirp_padded, n_tile)
+                signals = np.tile(chirp_padded, n_tile)
             else:
                 raise Exception('Iinvalid source label')
 
@@ -190,7 +196,7 @@ class environment:
                 dt_B = rB/self.c
  
                 # create interpolation
-                f = interpolate.interp1d(self.t, signal, kind='cubic', bounds_error=False)
+                f = interpolate.interp1d(self.t, signals, kind='cubic', bounds_error=False)
             
                 # interpolate time shift
                 xA_single = f(self.t - dt_A)/(rA**2)
@@ -205,6 +211,15 @@ class environment:
                 # remove nan
                 xA_single[np.isnan(xA_single)] = 0
                 xB_single[np.isnan(xB_single)] = 0
+
+                # handle incoherent sources
+                if incoherent:
+                    if source.hydrophone == 'A':
+                        xB_single = np.zeros(len(self.t))
+                    elif source.hydrophone == 'B':
+                        xA_single = np.zeros(len(self.t))
+                    else:
+                        raise Exception('Invalid (or missing) hydrophone label')
 
                 xA += xA_single
                 xB += xB_single
@@ -300,16 +315,35 @@ class source_distribution:
 
         return self.sources
 
-    def surface_line(self, xmin=-10000, xmax=10000, npts = 1000):
+    def surface_line(self, xmin=-10000, xmax=10000, npts = 1000, y=0, label='gauss'):
         '''
         single line in same dimension as nodes
         '''
 
         x = np.linspace(xmin, xmax, npts)
-        y = np.zeros(npts)
+        y = np.ones(npts)*y
         z = np.ones(npts)*self.depth
 
-        sources_dict = {'X':x, 'Y':y, 'Z':z, 'label':'gauss'}
+        sources_dict = {'X':x, 'Y':y, 'Z':z, 'label':label}
         self.sources = pd.DataFrame(sources_dict)
+
+        return self.sources
+
+    def surface_line_incoherent(self, xmin=-10000, xmax=10000, npts = 1000, y=0, label='gauss', hydrophone='A'):
+        '''
+        single line in same dimension as nodes
+        '''
+
+        x = np.linspace(xmin, xmax, npts)
+        y = np.ones(npts)*y
+        z = np.ones(npts)*self.depth
+
+        sources_dict = {'X':x, 'Y':y, 'Z':z, 'label':label, 'hydrophone':hydrophone}
+        
+        try:
+            self.sources
+            self.sources = pd.concat((self.sources, pd.DataFrame(sources_dict)), ignore_index=True)
+        except:
+            self.sources = pd.DataFrame(sources_dict)
 
         return self.sources
