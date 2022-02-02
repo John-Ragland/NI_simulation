@@ -4,7 +4,7 @@ import pandas as pd
 from scipy import interpolate
 import multiprocessing as mp
 from multiprocessing import Pool
-import tqdm
+from tqdm import tqdm
 
 from matplotlib.lines import Line2D
 from matplotlib import pyplot as plt
@@ -130,21 +130,22 @@ class environment:
 
         # calculate the chuck size as an integer
         chunk_size = int(sources.shape[0]/(num_processes-1))
-
+        
+        # manually set chunk size
+        chunk_size = 1
+        
         # Divide dataframe up into num_processes chunks
         #chunks = [sources.ix[sources.index[i:i + chunk_size]] for i in range(0, sources.shape[0],chunk_size)]
         chunks = [sources.iloc[i:i + chunk_size,:] for i in range(0, sources.shape[0], chunk_size)]
-
-        # TQDM
-        '''
-        with mp.Pool(num_processes) as p:
-            result = list(tqdm.tqdm(p.imap(self.get_signals_1cpu, chunks), total=len(sources)))
-        '''
+        
 
         # Original Method
         self.count = 0
         Pool = mp.Pool(processes = num_processes)
-        result = Pool.map(self.get_signals_1cpu, chunks)
+        
+        result = list(tqdm(Pool.imap(self.get_signals_1cpu, chunks), total=len(self.sources)))
+        
+        #result = Pool.map(self.get_signals_1cpu, chunks)
         Pool.close()
 
         # Unpack result
@@ -284,6 +285,23 @@ class source_distribution2D:
                 x_coord.append(x)
                 y_coord.append(y)
         
+        sources_dict = {'X':x_coord, 'Y':y_coord}
+        sources = pd.DataFrame(sources_dict)
+        return sources
+    
+    def donut(self, inner_radius, outer_radius, n_sources):
+        x_coord = []
+        y_coord = []
+        
+        while len(x_coord) < n_sources:
+            x = np.random.uniform(-outer_radius, outer_radius, 1)
+            y = np.random.uniform(-outer_radius, outer_radius, 1)
+
+            if ((x**2 + y**2)**0.5 > inner_radius) & ((x**2 + y**2)**0.5 < outer_radius):
+                x_coord.append(x)
+                y_coord.append(y)
+            else:
+                pass
         sources_dict = {'X':x_coord, 'Y':y_coord}
         sources = pd.DataFrame(sources_dict)
         return sources
