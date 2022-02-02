@@ -1,10 +1,16 @@
+from typing import Counter
 import numpy as np
+from numpy.core.numeric import outer
 import scipy
 import pandas as pd
 from scipy import interpolate
 import multiprocessing as mp
 from multiprocessing import Pool
 from tqdm import tqdm
+
+from scipy.io import wavfile
+import scipy.io
+from scipy import signal
 
 from matplotlib.lines import Line2D
 from matplotlib import pyplot as plt
@@ -72,20 +78,69 @@ class environment:
         xB = np.zeros(self.t.shape)
         for index, source in self.sources.iterrows():
             coord = (source.X, source.Y)
-            rA, rB = self.__get_radius(coord)
             
-            # Generate instance of gaussian noise N(0,1)
-            noise = np.random.normal(0,1,len(self.t))
-
-            # create interpolation
-            f = interpolate.interp1d(self.t, noise, kind='cubic', bounds_error=False)
-
+            # get radius and time shift
+            rA, rB = self.__get_radius(coord)
             dt_A = rA/self.c
             dt_B = rB/self.c
+            if source.label == 'gauss':
+                # Generate instance of gaussian noise N(0,1)
+                noise = np.random.normal(0,1,len(self.t))
+                
+                # create interpolation
+                f = interpolate.interp1d(self.t, noise, kind='cubic', bounds_error=False)
+                
+                # interpolate time shift
+                xA_single = f(self.t - dt_A)/(rA**2)
+                xB_single = f(self.t - dt_B)/(rB**2)
+           
+            elif source.label == 'sin':
+                boost = 1
+                xA_single = boost*np.sin(2*np.pi*20*(self.t-dt_A))/(rA**2)
+                xB_single = boost*np.sin(2*np.pi*20*(self.t-dt_B))/(rA**2)
+            
+            elif source.label == 'fin':
+                boost = 120
 
-            # interpolate time shift
-            xA_single = f(self.t - dt_A)/(rA**2)
-            xB_single = f(self.t - dt_B)/(rB**2)
+                # read fin wav file and convert to Fs = 200Hz
+                _, fin = wavfile.read('./atlfin_128_64_0-50-FinWhaleAtlantic-10x.wav')
+                fin = fin/np.max(fin)
+                fin200 = signal.decimate(fin, 4, zero_phase=True)
+
+                # repeat in time to match time_length
+                if len(self.t)/len(fin200) < 1:
+                    fin_expanded = fin200[:len(self.t)]
+                else:
+                    fin_expanded = np.tile(fin200, (np.round(len(self.t)/len(fin200),)))[:len(self.t)]
+                f = interpolate.interp1d(self.t, fin_expanded, kind='cubic', bounds_error=False)
+                xA_single = boost*f(self.t - dt_A)/(rA**2)
+                xB_single = boost*f(self.t - dt_B)/(rB**2)
+            
+            elif source.label == 'fin_model':
+                boost = 1.5 # boosts signal by factor
+                
+                # Fin Whale Model Attributes
+                dt = 0.3
+                f0 = 25
+                f1 = 15
+                T = 20
+                decay = -1
+                
+                # create time sequence
+                t = np.arange(0,dt,1/200)
+                win = np.exp(t*decay)
+                chirp = signal.chirp(t,f0,dt,f1)*win
+
+                chirp_padded = np.zeros(T*200)
+                chirp_padded[:len(chirp)] = chirp
+                n_tile = int(self.time_length*200/len(chirp_padded))
+                chirp_extended = np.tile(chirp_padded, n_tile)
+                f = interpolate.interp1d(self.t, chirp_extended, kind='cubic', bounds_error=False)
+                xA_single = boost*f(self.t - dt_A)/(rA**2)
+                xB_single = boost*f(self.t - dt_B)/(rB**2)
+
+            else:
+                raise Exception('Invalid source label')
 
             # remove spherical spreading if radius < 1 m
             if rA < 1:
@@ -177,22 +232,57 @@ class environment:
         return[xA_single, xB_single]
 
     def plot_env(self):
-        sources_x = self.sources.X.to_numpy()
-        sources_y = self.sources.Y.to_numpy()
+        noise_sources_x = self.sources[self.sources.label == 'gauss'].X.to_numpy()
+        noise_sources_y = self.sources[self.sources.label == 'gauss'].Y.to_numpy()
+        
+        sin_sources_x = self.sources[(self.sources.label == 'fin_model') | (self.sources.label == 'fin')].X.to_numpy()
+        sin_sources_y = self.sources[(self.sources.label == 'fin_model') | (self.sources.label == 'fin')].Y.to_numpy()
 
         fig, ax = plt.subplots(1,1, figsize=(7,7))
-        ax.plot(sources_x, sources_y, '.')
+        # Plot Gaussian Noise Sources
+        ax.plot(noise_sources_x, noise_sources_y, '.')
 
+        # Plot Sine Noise Sources
+        ax.plot(sin_sources_x, sin_sources_y, '.', color = 'C1', markersize=15)
+
+        # Plot hydrophones
         ax.plot(self.nodeA[0], self.nodeA[1], '.', color = 'r', markersize=20)
         ax.plot(self.nodeB[0], self.nodeB[1], '.', color = 'r', markersize=20)
 
         leg_elements = [
-            Line2D([0],[0], marker='o', color='w', label='Sources',markerfacecolor='C0', markersize=10),
-            Line2D([0],[0], marker='o', color='w', label='Hydrophone Nodes', markerfacecolor='r', markersize=10)]
-        ax.legend(handles=leg_elements, loc='upper right', fontsize=16)
+            Line2D(
+                [0],[0], marker='o', color='w', label='Sources',
+                markerfacecolor='C0', markersize=10),
+            Line2D(
+                [0],[0], marker='o', color='w', label='Hydrophone Nodes',
+                markerfacecolor='r', markersize=10),
+            Line2D(
+                [0],[0], marker='o', color='w', label='Fin Whale Source',
+                markerfacecolor='C1', markersize=10)
+        ]
+        
+        ax.legend(handles=leg_elements, loc='lower right', fontsize=16)
         ax.set_xlabel('Distance (m)')
         ax.set_ylabel('Distance (m)')
+        plt.grid()
         return fig, ax
+
+    def correlate(self):
+        '''
+        computes noise cross correlation function for generated signals xA and
+            xB
+        
+        Returns
+        -------
+        NCCF : numpy array
+            noise cross correlation function
+        '''
+    
+        xA = self.xA
+        xB = self.xB
+        NCCF = signal.fftconvolve(xA, np.flip(xB), mode='full')
+
+        return NCCF
 
 class source_distribution2D:
     def __init__(self):
@@ -222,11 +312,12 @@ class source_distribution2D:
 
         x_coord = radius*np.cos(thetas) + center[0]
         y_coord = radius*np.sin(thetas) + center[1]
+        
+        labels = ['gauss']*len(x_coord)
+        sources_dict = {'X':x_coord, 'Y':y_coord, 'label':labels}
+        self.sources = pd.DataFrame(sources_dict)
 
-        sources_dict = {'X':x_coord, 'Y':y_coord}
-        sources = pd.DataFrame(sources_dict)
-
-        return sources
+        return self.sources
 
     def uniform(self, x_bound, y_bound, n_sources):
         '''
@@ -249,11 +340,12 @@ class source_distribution2D:
         '''
         x = np.random.uniform(-x_bound, x_bound, n_sources)
         y = np.random.uniform(-y_bound, y_bound, n_sources)
+        labels = ['gauss']*len(x)
 
-        sources_dict = {'X':x, 'Y':y}
-        sources = pd.DataFrame(sources_dict)
+        sources_dict = {'X':x, 'Y':y, 'label':labels}
+        self.sources = pd.DataFrame(sources_dict)
 
-        return sources
+        return self.sources
     
     def endfire_circle(self, deg_bound, radius, n_sources):
         thetas1 = np.linspace(-np.deg2rad(deg_bound), np.deg2rad(deg_bound), int(n_sources/2))
@@ -265,21 +357,23 @@ class source_distribution2D:
         y_coord = radius*np.sin(thetas1)
         y_coord = np.hstack((y_coord, radius*np.sin(thetas2)))
 
-        sources_dict = {'X':x_coord, 'Y':y_coord}
-        sources = pd.DataFrame(sources_dict)
+        labels = ['gauss']*len(x_coord)
 
-        return sources
+        sources_dict = {'X':x_coord, 'Y':y_coord, 'label':labels}
+        self.sources = pd.DataFrame(sources_dict)
 
-    def distant_uniform(self, inner_radius, x_bound, y_bound, n_sources):
+        return self.sources
+
+    def distant_uniform(self, inner_radius, outer_radius, n_sources):
         
         x_coord = []
         y_coord = []
 
         while len(x_coord) < n_sources:
-            x = np.random.uniform(-x_bound, x_bound, 1)
-            y = np.random.uniform(-y_bound, y_bound, 1)
+            x = np.random.uniform(-outer_radius, outer_radius, 1)
+            y = np.random.uniform(-outer_radius, outer_radius, 1)
 
-            if (x**2 + y**2)**0.5 < inner_radius:
+            if ((x**2 + y**2)**0.5 < inner_radius) | ((x**2 + y**2)**0.5 > outer_radius):
                 pass
             else:
                 x_coord.append(x)
@@ -305,3 +399,41 @@ class source_distribution2D:
         sources_dict = {'X':x_coord, 'Y':y_coord}
         sources = pd.DataFrame(sources_dict)
         return sources
+
+        
+
+    def add_custom_sources(self, label):
+        '''
+        adds sources with 20 Hz sine wave sources
+        Parameters
+        ----------
+        label : str
+            - 'sin'
+            - 'fin'
+            - 'model_fin'
+        
+        Returns
+        -------
+        Updates Source Class
+        '''
+        # Check if noise sources exists
+        try:
+            self.sources
+        except AttributeError:
+            raise Exception('create noise source distribution first')
+
+        sine_sources = {'X':-12000, 'Y':0, 'label':label}
+        self.sources = self.sources.append(sine_sources, ignore_index=True)
+
+    def fin_whale_dist(self, inner_radius, outer_radius, deg_bound, n_sources, deg=180):
+
+        r = outer_radius*np.sqrt(np.random.uniform((inner_radius/outer_radius)**2, 1, n_sources))
+        theta = np.random.uniform(np.deg2rad(deg)-np.deg2rad(deg_bound), np.deg2rad(deg)+np.deg2rad(deg_bound), n_sources)
+        x = r*np.cos(theta)
+        y = r*np.sin(theta)       
+        
+        labels = ['fin_model']*len(x)
+        sources_dict = {'X':x, 'Y':y, 'label':labels}
+        self.sources = self.sources.append(pd.DataFrame(sources_dict))
+        
+        return self.sources

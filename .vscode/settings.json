@@ -1,3 +1,4 @@
 {
-    "python.pythonPath": "/Users/jhrag/opt/anaconda3/envs/ooi_dev/bin/python"
+    "python.pythonPath": "/home/jhrag/anaconda3/envs/ooi_dev/bin/python",
+    "jupyter.jupyterServerType": "local"
 }
