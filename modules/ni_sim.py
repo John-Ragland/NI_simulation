@@ -16,7 +16,7 @@ from matplotlib.lines import Line2D
 from matplotlib import pyplot as plt
 
 class environment:
-    def __init__(self, sources, time_length=60):
+    def __init__(self, sources, time_length=60, frequencies = None):
         '''
         initialize environment variable
         Parameters
@@ -38,6 +38,8 @@ class environment:
         self.nodeB = (1500, 0)
 
         self.sources = sources
+        
+        self.frequencies = frequencies
 
     def __get_time_signal(self, r):
         '''
@@ -138,7 +140,18 @@ class environment:
                 f = interpolate.interp1d(self.t, chirp_extended, kind='cubic', bounds_error=False)
                 xA_single = boost*f(self.t - dt_A)/(rA**2)
                 xB_single = boost*f(self.t - dt_B)/(rB**2)
-
+            
+            elif source.label == 'harmonic':
+                # Generate instance of gaussian noise N(0,1)
+                noise = np.random.normal(0,1,len(self.t))
+                
+                # create interpolation
+                f = interpolate.interp1d(self.t, noise, kind='cubic', bounds_error=False)
+                
+                # interpolate time shift
+                xA_single = f(self.t - dt_A)/(rA**2)
+                xB_single = f(self.t - dt_B)/(rB**2)
+            
             else:
                 raise Exception('Invalid source label')
 
@@ -154,6 +167,8 @@ class environment:
 
             xA += xA_single
             xB += xB_single
+            
+            
             #print(f'{index/len(sources)*100:0.3}', end='\r')
 
             #print('.', end='')
@@ -193,6 +208,7 @@ class environment:
         #chunks = [sources.ix[sources.index[i:i + chunk_size]] for i in range(0, sources.shape[0],chunk_size)]
         chunks = [sources.iloc[i:i + chunk_size,:] for i in range(0, sources.shape[0], chunk_size)]
         
+        return chunks
 
         # Original Method
         self.count = 0
@@ -232,8 +248,8 @@ class environment:
         return[xA_single, xB_single]
 
     def plot_env(self):
-        noise_sources_x = self.sources[self.sources.label == 'gauss'].X.to_numpy()
-        noise_sources_y = self.sources[self.sources.label == 'gauss'].Y.to_numpy()
+        noise_sources_x = self.sources[self.sources.label == 'harmonic'].X.to_numpy()
+        noise_sources_y = self.sources[self.sources.label == 'harmonic'].Y.to_numpy()
         
         sin_sources_x = self.sources[(self.sources.label == 'fin_model') | (self.sources.label == 'fin')].X.to_numpy()
         sin_sources_y = self.sources[(self.sources.label == 'fin_model') | (self.sources.label == 'fin')].Y.to_numpy()
@@ -256,9 +272,9 @@ class environment:
             Line2D(
                 [0],[0], marker='o', color='w', label='Hydrophone Nodes',
                 markerfacecolor='r', markersize=10),
-            Line2D(
-                [0],[0], marker='o', color='w', label='Fin Whale Source',
-                markerfacecolor='C1', markersize=10)
+            #Line2D(
+            #    [0],[0], marker='o', color='w', label='Fin Whale Source',
+            #    markerfacecolor='C1', markersize=10)
         ]
         
         ax.legend(handles=leg_elements, loc='lower right', fontsize=16)
@@ -288,7 +304,7 @@ class source_distribution2D:
     def __init__(self):
         pass
 
-    def uniform_circular(self, radius, center, n_sources):
+    def uniform_circular(self, radius, center, n_sources, label='harmonic'):
         '''
         uniform_circular creates a source distribution that is uniformly
             spaced along a circle with given radius and center and given
@@ -302,11 +318,14 @@ class source_distribution2D:
             (x,y) cooridinate of circle center
         n_sources : float
             number of sources that will be used in simulation
-        
+        label : str
+            determines how the acoustic field is calculated
+            
         Returns
         -------
         sources : pandas DataFrame
-            dataframe listing all sources and x, y cooridinates given in meters
+            dataframe listing all sources, x, y cooridinates given in meters
+            and the label (which determines how to calculate the acoustic field)
         '''
         thetas = np.linspace(0, 2*np.pi, n_sources)
 
@@ -319,7 +338,7 @@ class source_distribution2D:
 
         return self.sources
 
-    def uniform(self, x_bound, y_bound, n_sources):
+    def uniform(self, x_bound, y_bound, n_sources, label='harmonic'):
         '''
         creates uniform source distribution in space consisting of n_sources
             discrete sources
@@ -332,11 +351,14 @@ class source_distribution2D:
             sources are uniformly distributed between += y_bound
         n_sources : int
             number of sources included in simulation
-
+        label : str
+            determines how the acoustic field is calculated
+            
         Returns
         -------
-        sources : pandas.DataFrame
-            list of source x and y cooridinates
+        sources : pandas DataFrame
+            dataframe listing all sources, x, y cooridinates given in meters
+            and the label (which determines how to calculate the acoustic field)
         '''
         x = np.random.uniform(-x_bound, x_bound, n_sources)
         y = np.random.uniform(-y_bound, y_bound, n_sources)
@@ -347,7 +369,30 @@ class source_distribution2D:
 
         return self.sources
     
-    def endfire_circle(self, deg_bound, radius, n_sources):
+    def endfire_circle(self, deg_bound, radius, n_sources, label='harmonic'):
+        '''
+        endfire_circle creates a source distribution that is in the endfire
+            direction a circle with given radius and given
+            number of sources
+        
+        Parameters
+        ----------
+        deg_bound : float
+            deg bound of circle
+        radius : float
+            radius of circle
+        n_sources : float
+            number of sources that will be used in simulation
+        label : str
+            determines how the acoustic field is calculated
+        
+        Returns
+        -------
+        sources : pandas DataFrame
+            dataframe listing all sources, x, y cooridinates given in meters
+            and the label (which determines how to calculate the acoustic field)
+        '''
+        
         thetas1 = np.linspace(-np.deg2rad(deg_bound), np.deg2rad(deg_bound), int(n_sources/2))
         thetas2 = np.linspace(np.pi-np.deg2rad(deg_bound), np.pi+np.deg2rad(deg_bound), int(n_sources/2))
 
@@ -364,8 +409,29 @@ class source_distribution2D:
 
         return self.sources
 
-    def distant_uniform(self, inner_radius, outer_radius, n_sources):
+    def distant_uniform(self, inner_radius, outer_radius, n_sources, label='harmonic'):
+        '''
+        distant creates a source distribution that is uniformly
+            spaced along a circle with given radius and center and given
+            number of sources
         
+        Parameters
+        ----------
+        inner_radius : float
+            inner radius of distribution
+        outer_radius : float
+            outer radius of distribution
+        n_sources : float
+            number of sources that will be used in simulation
+        label : str
+            determines how the acoustic field is calculated
+            
+        Returns
+        -------
+        sources : pandas DataFrame
+            dataframe listing all sources, x, y cooridinates given in meters
+            and the label (which determines how to calculate the acoustic field)
+        '''
         x_coord = []
         y_coord = []
 
@@ -379,29 +445,12 @@ class source_distribution2D:
                 x_coord.append(x)
                 y_coord.append(y)
         
-        sources_dict = {'X':x_coord, 'Y':y_coord}
+        labels = [label]*len(x_coord)
+        sources_dict = {'X':x_coord, 'Y':y_coord, 'label':labels}
+
         sources = pd.DataFrame(sources_dict)
         return sources
     
-    def donut(self, inner_radius, outer_radius, n_sources):
-        x_coord = []
-        y_coord = []
-        
-        while len(x_coord) < n_sources:
-            x = np.random.uniform(-outer_radius, outer_radius, 1)
-            y = np.random.uniform(-outer_radius, outer_radius, 1)
-
-            if ((x**2 + y**2)**0.5 > inner_radius) & ((x**2 + y**2)**0.5 < outer_radius):
-                x_coord.append(x)
-                y_coord.append(y)
-            else:
-                pass
-        sources_dict = {'X':x_coord, 'Y':y_coord}
-        sources = pd.DataFrame(sources_dict)
-        return sources
-
-        
-
     def add_custom_sources(self, label):
         '''
         adds sources with 20 Hz sine wave sources
