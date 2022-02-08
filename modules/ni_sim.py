@@ -59,7 +59,7 @@ class environment:
         x = 1/(r**2)*np.exp(-((self.t-r/self.c)**2)/(2*self.sigma)**2)*np.exp(1j*self.w0*(self.t-r/self.c))
         return x
 
-    def get_signals_1cpu(self, sources):
+    def get_signals_1cpu(self, source):
         '''
         get_signals calculated the time domain recieved signal at node A and B
             for a given source distribution
@@ -76,104 +76,104 @@ class environment:
         x_B : numpy array
             time series of recieved signal for node B. (Sampled at self.Fs)
         '''
-        xA = np.zeros(self.t.shape)
-        xB = np.zeros(self.t.shape)
-        for index, source in self.sources.iterrows():
-            coord = (source.X, source.Y)
-            
-            # get radius and time shift
-            rA, rB = self.__get_radius(coord)
-            dt_A = rA/self.c
-            dt_B = rB/self.c
-            if source.label == 'gauss':
-                # Generate instance of gaussian noise N(0,1)
-                noise = np.random.normal(0,1,len(self.t))
-                
-                # create interpolation
-                f = interpolate.interp1d(self.t, noise, kind='cubic', bounds_error=False)
-                
-                # interpolate time shift
-                xA_single = f(self.t - dt_A)/(rA**2)
-                xB_single = f(self.t - dt_B)/(rB**2)
-           
-            elif source.label == 'sin':
-                boost = 1
-                xA_single = boost*np.sin(2*np.pi*20*(self.t-dt_A))/(rA**2)
-                xB_single = boost*np.sin(2*np.pi*20*(self.t-dt_B))/(rA**2)
-            
-            elif source.label == 'fin':
-                boost = 120
 
-                # read fin wav file and convert to Fs = 200Hz
-                _, fin = wavfile.read('./atlfin_128_64_0-50-FinWhaleAtlantic-10x.wav')
-                fin = fin/np.max(fin)
-                fin200 = signal.decimate(fin, 4, zero_phase=True)
+        coord = (source.X.values[0], source.Y.values[0])
+            
+        # get radius and time shift
+        rA, rB = self.__get_radius(coord)
+        dt_A = rA/self.c
+        dt_B = rB/self.c
+            
+        if source.label.values[0] == 'gauss':
+            # Generate instance of gaussian noise N(0,1)
+            noise = np.random.normal(0,1,len(self.t))
 
-                # repeat in time to match time_length
-                if len(self.t)/len(fin200) < 1:
-                    fin_expanded = fin200[:len(self.t)]
-                else:
-                    fin_expanded = np.tile(fin200, (np.round(len(self.t)/len(fin200),)))[:len(self.t)]
-                f = interpolate.interp1d(self.t, fin_expanded, kind='cubic', bounds_error=False)
-                xA_single = boost*f(self.t - dt_A)/(rA**2)
-                xB_single = boost*f(self.t - dt_B)/(rB**2)
-            
-            elif source.label == 'fin_model':
-                boost = 1.5 # boosts signal by factor
-                
-                # Fin Whale Model Attributes
-                dt = 0.3
-                f0 = 25
-                f1 = 15
-                T = 20
-                decay = -1
-                
-                # create time sequence
-                t = np.arange(0,dt,1/200)
-                win = np.exp(t*decay)
-                chirp = signal.chirp(t,f0,dt,f1)*win
+            # create interpolation
+            f = interpolate.interp1d(self.t, noise, kind='cubic', bounds_error=False)
 
-                chirp_padded = np.zeros(T*200)
-                chirp_padded[:len(chirp)] = chirp
-                n_tile = int(self.time_length*200/len(chirp_padded))
-                chirp_extended = np.tile(chirp_padded, n_tile)
-                f = interpolate.interp1d(self.t, chirp_extended, kind='cubic', bounds_error=False)
-                xA_single = boost*f(self.t - dt_A)/(rA**2)
-                xB_single = boost*f(self.t - dt_B)/(rB**2)
-            
-            elif source.label == 'harmonic':
-                # Generate instance of gaussian noise N(0,1)
-                noise = np.random.normal(0,1,len(self.t))
-                
-                # create interpolation
-                f = interpolate.interp1d(self.t, noise, kind='cubic', bounds_error=False)
-                
-                # interpolate time shift
-                xA_single = f(self.t - dt_A)/(rA**2)
-                xB_single = f(self.t - dt_B)/(rB**2)
-            
+            # interpolate time shift
+            xA_single = f(self.t - dt_A)/(rA**2)
+            xB_single = f(self.t - dt_B)/(rB**2)
+
+        elif source.label.values[0] == 'sin':
+            boost = 1
+            xA_single = boost*np.sin(2*np.pi*20*(self.t-dt_A))/(rA**2)
+            xB_single = boost*np.sin(2*np.pi*20*(self.t-dt_B))/(rA**2)
+
+        elif source.label.values[0] == 'fin':
+            boost = 120
+
+            # read fin wav file and convert to Fs = 200Hz
+            _, fin = wavfile.read('./atlfin_128_64_0-50-FinWhaleAtlantic-10x.wav')
+            fin = fin/np.max(fin)
+            fin200 = signal.decimate(fin, 4, zero_phase=True)
+
+            # repeat in time to match time_length
+            if len(self.t)/len(fin200) < 1:
+                fin_expanded = fin200[:len(self.t)]
             else:
-                raise Exception('Invalid source label')
+                fin_expanded = np.tile(fin200, (np.round(len(self.t)/len(fin200),)))[:len(self.t)]
+            f = interpolate.interp1d(self.t, fin_expanded, kind='cubic', bounds_error=False)
+            xA_single = boost*f(self.t - dt_A)/(rA**2)
+            xB_single = boost*f(self.t - dt_B)/(rB**2)
 
-            # remove spherical spreading if radius < 1 m
-            if rA < 1:
-                xA_single = xA_single*(rA**2)
-            if rB < 1:
-                xB_single = xB_single*(rB**2)
+        elif source.label.values[0] == 'fin_model':
+            boost = 1.5 # boosts signal by factor
 
-            # remove nan
-            xA_single[np.isnan(xA_single)] = 0
-            xB_single[np.isnan(xB_single)] = 0
+            # Fin Whale Model Attributes
+            dt = 0.3
+            f0 = 25
+            f1 = 15
+            T = 20
+            decay = -1
 
-            xA += xA_single
-            xB += xB_single
+            # create time sequence
+            t = np.arange(0,dt,1/200)
+            win = np.exp(t*decay)
+            chirp = signal.chirp(t,f0,dt,f1)*win
+
+            chirp_padded = np.zeros(T*200)
+            chirp_padded[:len(chirp)] = chirp
+            n_tile = int(self.time_length*200/len(chirp_padded))
+            chirp_extended = np.tile(chirp_padded, n_tile)
+            f = interpolate.interp1d(self.t, chirp_extended, kind='cubic', bounds_error=False)
+            xA_single = boost*f(self.t - dt_A)/(rA**2)
+            xB_single = boost*f(self.t - dt_B)/(rB**2)
+
+        elif source.label.values[0] == 'harmonic':
+            
+            freqs = self.frequencies
+            xA_single = np.zeros(self.t.shape)
+            xB_single = np.zeros(self.t.shape)
+            
+            freq_range = np.max(freqs) - np.min(freqs)
+            for freq in list(freqs):
+                # x is sinusoid with time delay equal to dt and a phase
+                # which is a function of frequency and frequency range
+                # weird phase, but makes computations faster
+                xA_single = xA_single + np.sin((self.t - dt_A)*2*np.pi*freq + (freq - np.min(freqs))*2*np.pi/freq_range)
+                xB_single = xB_single + np.sin((self.t - dt_B) *2*np.pi*freq + (freq - np.min(freqs))*2*np.pi/freq_range)
+
+        else:
+            raise Exception('Invalid source label')
+
+        # remove spherical spreading if radius < 1 m
+        if rA < 1:
+            xA_single = xA_single*(rA**2)
+        if rB < 1:
+            xB_single = xB_single*(rB**2)
+
+        # remove nan
+        xA_single[np.isnan(xA_single)] = 0
+        xB_single[np.isnan(xB_single)] = 0
+
             
             
-            #print(f'{index/len(sources)*100:0.3}', end='\r')
+        #print(f'{index/len(sources)*100:0.3}', end='\r')
 
-            #print('.', end='')
+        #print('.', end='')
         #print(mp.current_process().pid)
-        return xA, xB
+        return xA_single, xB_single
 
     def __get_radius(self, coord):
         '''
@@ -207,8 +207,6 @@ class environment:
         # Divide dataframe up into num_processes chunks
         #chunks = [sources.ix[sources.index[i:i + chunk_size]] for i in range(0, sources.shape[0],chunk_size)]
         chunks = [sources.iloc[i:i + chunk_size,:] for i in range(0, sources.shape[0], chunk_size)]
-        
-        return chunks
 
         # Original Method
         self.count = 0
