@@ -246,8 +246,8 @@ class environment:
         return[xA_single, xB_single]
 
     def plot_env(self):
-        noise_sources_x = self.sources[self.sources.label == 'harmonic'].X.to_numpy()
-        noise_sources_y = self.sources[self.sources.label == 'harmonic'].Y.to_numpy()
+        noise_sources_x = self.sources[self.sources.label == 'gauss'].X.to_numpy()
+        noise_sources_y = self.sources[self.sources.label == 'gauss'].Y.to_numpy()
         
         sin_sources_x = self.sources[(self.sources.label == 'fin_model') | (self.sources.label == 'fin')].X.to_numpy()
         sin_sources_y = self.sources[(self.sources.label == 'fin_model') | (self.sources.label == 'fin')].Y.to_numpy()
