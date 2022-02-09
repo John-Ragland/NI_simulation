@@ -76,7 +76,11 @@ class environment:
         x_B : numpy array
             time series of recieved signal for node B. (Sampled at self.Fs)
         '''
-
+        
+        # set random seed to be source number
+        # so that different cores don't generate same numbers
+        np.random.seed(int(np.array(source.index)))
+        
         coord = (source.X.values[0], source.Y.values[0])
             
         # get radius and time shift
@@ -92,8 +96,8 @@ class environment:
             f = interpolate.interp1d(self.t, noise, kind='cubic', bounds_error=False)
 
             # interpolate time shift
-            xA_single = f(self.t - dt_A)/(rA**2)
-            xB_single = f(self.t - dt_B)/(rB**2)
+            xA_single = f(self.t - dt_A)/(rA)
+            xB_single = f(self.t - dt_B)/(rB)
 
         elif source.label.values[0] == 'sin':
             boost = 1
@@ -196,17 +200,17 @@ class environment:
 
     def get_signals(self):
         sources = self.sources
-        num_processes = mp.cpu_count()
-
-        # calculate the chuck size as an integer
-        chunk_size = int(sources.shape[0]/(num_processes-1))
         
-        # manually set chunk size
-        chunk_size = 1
+        # set num_processes to be number of cores, or size of array
+            # whichever is smaller
         
-        # Divide dataframe up into num_processes chunks
-        #chunks = [sources.ix[sources.index[i:i + chunk_size]] for i in range(0, sources.shape[0],chunk_size)]
-        chunks = [sources.iloc[i:i + chunk_size,:] for i in range(0, sources.shape[0], chunk_size)]
+        if mp.cpu_count() < len(sources):
+            num_processes = mp.cpu_count()
+        else:
+            num_processes = len(sources)
+        
+        # Divide dataframe up into list of rows
+        chunks = [sources.iloc[i:i + 1,:] for i in range(0, sources.shape[0], 1)]
 
         # Original Method
         self.count = 0
@@ -220,7 +224,7 @@ class environment:
         # Unpack result
         xA = np.zeros(self.t.shape)
         xB = np.zeros(self.t.shape)
-        for k in range(num_processes):
+        for k in range(len(sources)):
             xA += result[k][0]
             xB += result[k][1]
        
@@ -449,28 +453,39 @@ class source_distribution2D:
         sources = pd.DataFrame(sources_dict)
         return sources
     
-    def add_custom_sources(self, label):
+    def add_custom_sources(self, x,y,label):
         '''
         adds sources with 20 Hz sine wave sources
         Parameters
         ----------
+        x : array like
+            x position of sources in meters
+        y : array like 
+            y position of sources in meters
         label : str
             - 'sin'
             - 'fin'
             - 'model_fin'
+            - 'gauss'
         
         Returns
         -------
         Updates Source Class
         '''
+
+        custom_sources = {'X':[x], 'Y':[y], 'label':label}
+
         # Check if noise sources exists
         try:
             self.sources
+            self.sources = self.sources.append(custom_sources, ignore_index=True)
+        
         except AttributeError:
-            raise Exception('create noise source distribution first')
+            self.sources = pd.DataFrame(data = custom_sources)
+            
+        return self.sources
 
-        sine_sources = {'X':-12000, 'Y':0, 'label':label}
-        self.sources = self.sources.append(sine_sources, ignore_index=True)
+        
 
     def fin_whale_dist(self, inner_radius, outer_radius, deg_bound, n_sources, deg=180):
 
