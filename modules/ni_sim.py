@@ -163,21 +163,132 @@ class environment:
 
         # remove spherical spreading if radius < 1 m
         if rA < 1:
-            xA_single = xA_single*(rA**2)
+            xA_single = xA_single*(rA)
         if rB < 1:
-            xB_single = xB_single*(rB**2)
+            xB_single = xB_single*(rB)
 
         # remove nan
         xA_single[np.isnan(xA_single)] = 0
         xB_single[np.isnan(xB_single)] = 0
 
-            
-            
-        #print(f'{index/len(sources)*100:0.3}', end='\r')
-
-        #print('.', end='')
-        #print(mp.current_process().pid)
         return xA_single, xB_single
+
+    def get_correlations_1cpu(self, source):
+        '''
+        get_correlations_1cpu calculated the time domain recieved signal at node A and B
+            for a given source distribution and then correlate them
+        
+        Parameters
+        ----------
+        sources : pandas.DataFrame
+            data frame containing the x and y information for every source
+        
+        Returns
+        -------
+        R : np.array
+            cross correlation between signals recieved at A and B
+        '''
+        
+        # set random seed to be source number
+        # so that different cores don't generate same numbers
+        np.random.seed(int(np.array(source.index)))
+        
+        coord = (source.X.values[0], source.Y.values[0])
+            
+        # get radius and time shift
+        rA, rB = self.__get_radius(coord)
+        dt_A = rA/self.c
+        dt_B = rB/self.c
+            
+        if source.label.values[0] == 'gauss':
+            # Generate instance of gaussian noise N(0,1)
+            noise = np.random.normal(0,1,len(self.t))
+            
+            # filter noise to 5 hz
+            b, a = signal.butter(4,10/100, btype='low')
+            noise = signal.lfilter(b,a,noise)
+            
+            # create interpolation
+            f = interpolate.interp1d(self.t, noise, kind='cubic', bounds_error=False)
+
+            # interpolate time shift
+            xA_single = f(self.t - dt_A)/(rA)
+            xB_single = f(self.t - dt_B)/(rB)
+
+        elif source.label.values[0] == 'sin':
+            boost = 1
+            xA_single = boost*np.sin(2*np.pi*20*(self.t-dt_A))/(rA**2)
+            xB_single = boost*np.sin(2*np.pi*20*(self.t-dt_B))/(rA**2)
+
+        elif source.label.values[0] == 'fin':
+            boost = 120
+
+            # read fin wav file and convert to Fs = 200Hz
+            _, fin = wavfile.read('./atlfin_128_64_0-50-FinWhaleAtlantic-10x.wav')
+            fin = fin/np.max(fin)
+            fin200 = signal.decimate(fin, 4, zero_phase=True)
+
+            # repeat in time to match time_length
+            if len(self.t)/len(fin200) < 1:
+                fin_expanded = fin200[:len(self.t)]
+            else:
+                fin_expanded = np.tile(fin200, (np.round(len(self.t)/len(fin200),)))[:len(self.t)]
+            f = interpolate.interp1d(self.t, fin_expanded, kind='cubic', bounds_error=False)
+            xA_single = boost*f(self.t - dt_A)/(rA**2)
+            xB_single = boost*f(self.t - dt_B)/(rB**2)
+
+        elif source.label.values[0] == 'fin_model':
+            boost = 1.5 # boosts signal by factor
+
+            # Fin Whale Model Attributes
+            dt = 0.3
+            f0 = 25
+            f1 = 15
+            T = 20
+            decay = -1
+
+            # create time sequence
+            t = np.arange(0,dt,1/200)
+            win = np.exp(t*decay)
+            chirp = signal.chirp(t,f0,dt,f1)*win
+
+            chirp_padded = np.zeros(T*200)
+            chirp_padded[:len(chirp)] = chirp
+            n_tile = int(self.time_length*200/len(chirp_padded))
+            chirp_extended = np.tile(chirp_padded, n_tile)
+            f = interpolate.interp1d(self.t, chirp_extended, kind='cubic', bounds_error=False)
+            xA_single = boost*f(self.t - dt_A)/(rA**2)
+            xB_single = boost*f(self.t - dt_B)/(rB**2)
+
+        elif source.label.values[0] == 'harmonic':
+            
+            freqs = self.frequencies
+            xA_single = np.zeros(self.t.shape)
+            xB_single = np.zeros(self.t.shape)
+            
+            freq_range = np.max(freqs) - np.min(freqs)
+            for freq in list(freqs):
+                # x is sinusoid with time delay equal to dt and a phase
+                # which is a function of frequency and frequency range
+                # weird phase, but makes computations faster
+                xA_single = xA_single + np.sin((self.t - dt_A)*2*np.pi*freq + (freq - np.min(freqs))*2*np.pi/freq_range)
+                xB_single = xB_single + np.sin((self.t - dt_B) *2*np.pi*freq + (freq - np.min(freqs))*2*np.pi/freq_range)
+
+        else:
+            raise Exception('Invalid source label')
+
+        # remove spherical spreading if radius < 1 m
+        if rA < 1:
+            xA_single = xA_single*(rA)
+        if rB < 1:
+            xB_single = xB_single*(rB)
+
+        # remove nan
+        xA_single[np.isnan(xA_single)] = 0
+        xB_single[np.isnan(xB_single)] = 0
+
+        R = signal.fftconvolve(xA_single, np.flip(xB_single), mode='full')
+        return R
 
     def __get_radius(self, coord):
         '''
@@ -197,8 +308,67 @@ class environment:
         rA = ((self.nodeA[0] - coord[0])**2 + (self.nodeA[1] - coord[1])**2)**0.5
         rB = ((self.nodeB[0] - coord[0])**2 + (self.nodeB[1] - coord[1])**2)**0.5
         return rA, rB
-
+    
+    def get_correlations(self, correlation_type='single', verbose=True, chunksize=1):
+        '''
+        get_correlation - version of get_signals, but the correlations are
+            taken before added seperate signal sources up.
+            
+            This forces the correlation between sources to be zero.
+            
+        Parameters
+        ----------
+        correlation_type : string
+            decides whether to return sum of all cross correlations ('single')
+            or every seperate cross_correlation ('all') default is single
+        Returns
+        -------
+        R : np.array
+            NCCF
+        t : np.array
+            delay time cooridinate for NCCF
+        '''
+        # check valid return type before simulation:
+        if (correlation_type != ('single')) & (correlation_type != ('all')):
+            raise Exception('invalid return type')
+            
+        sources = self.sources
+        
+        # set num_processes to be number of cores, or size of array
+            # whichever is smaller
+        
+        if mp.cpu_count() < len(sources):
+            num_processes = mp.cpu_count()
+        else:
+            num_processes = len(sources)
+        
+        # Divide dataframe up into list of rows
+        chunks = [sources.iloc[i:i + 1,:] for i in range(0, sources.shape[0], 1)]
+        # Original Method
+        
+        with mp.Pool(processes = num_processes) as Pool:
+        #Pool = mp.Pool(processes = num_processes)
+            result = list(tqdm(Pool.imap(self.get_correlations_1cpu, chunks, chunksize), total=len(self.sources), disable=(not verbose)))
+            #Pool.close()
+        
+        if correlation_type == 'all':
+            R = result
+        elif correlation_type == 'single':
+            # Unpack result
+            for k in range(len(result)):
+                if k == 0:
+                    R = result[k]
+                else:
+                    R += result[k]
+        
+        self.tau = np.linspace(-self.time_length + 1/self.Fs, self.time_length - 1/self.Fs, 2*self.time_length*self.Fs -1)
+        self.R = R
+        return self.tau, self.R
+    
     def get_signals(self):
+        '''
+        
+        '''
         sources = self.sources
         
         # set num_processes to be number of cores, or size of array
@@ -213,7 +383,6 @@ class environment:
         chunks = [sources.iloc[i:i + 1,:] for i in range(0, sources.shape[0], 1)]
 
         # Original Method
-        self.count = 0
         Pool = mp.Pool(processes = num_processes)
         
         result = list(tqdm(Pool.imap(self.get_signals_1cpu, chunks), total=len(self.sources)))
@@ -484,9 +653,7 @@ class source_distribution2D:
             self.sources = pd.DataFrame(data = custom_sources)
             
         return self.sources
-
         
-
     def fin_whale_dist(self, inner_radius, outer_radius, deg_bound, n_sources, deg=180):
 
         r = outer_radius*np.sqrt(np.random.uniform((inner_radius/outer_radius)**2, 1, n_sources))
