@@ -346,11 +346,11 @@ class environment:
         # Divide dataframe up into list of rows
         chunks = [sources.iloc[i:i + 1,:] for i in range(0, sources.shape[0], 1)]
         # Original Method
+        print(num_processes)
         
-        with mp.Pool(processes = num_processes) as Pool:
-        #Pool = mp.Pool(processes = num_processes)
-            result = list(tqdm(Pool.imap(self.get_correlations_1cpu, chunks, chunksize), total=len(self.sources), disable=(not verbose)))
-            #Pool.close()
+        Pool = mp.Pool(processes = num_processes)
+        result = list(tqdm(Pool.imap(self.get_correlations_1cpu, chunks, chunksize), total=len(self.sources), disable=(not verbose)))
+        Pool.close()
         
         if correlation_type == 'all':
             R = result
@@ -714,7 +714,42 @@ class source_distribution2D:
         self.sources = self.sources.append(pd.DataFrame(sources_dict))
         
         return self.sources
+      
+    def spiral(self, theta_range, range_range, npts, label='gauss'):
+        '''
+        creates spiral source distribution with mesh grid of 
+            thetas and ranges
+            
+            cartesian conversion is done with conventional
+                polar coordinate definition (theta is from x)
+                
+        Parameters
+        ----------
+        npts : int
+            total number of sources
+            sqrt(npts) must be integer. If not, it's forced
+        theta_range : tuple
+            min and max of theta
+        range_range : tuple
+            min and max of range
+        '''
+        
+        thetas = list(np.linspace(theta_range[0], theta_range[1], int(np.sqrt(npts))))
+        ranges = list(np.linspace(range_range[0], range_range[1], int(np.sqrt(npts))))
+        
+        x_coord = []
+        y_coord = []
+        
+        for theta in thetas:
+            for range_single in ranges:
+                x_coord.append(range_single*np.cos(theta))
+                y_coord.append(range_single*np.sin(theta))
+                
+        labels = [label]*len(x_coord)
+        sources_dict = {'X':x_coord, 'Y':y_coord, 'label':labels}
 
+        sources = pd.DataFrame(sources_dict)
+        return sources
 
 def calc_directivity(x, y, R, radius):
     '''
