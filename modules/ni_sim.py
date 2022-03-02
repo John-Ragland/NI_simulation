@@ -16,7 +16,7 @@ from matplotlib.lines import Line2D
 from matplotlib import pyplot as plt
 
 class environment:
-    def __init__(self, sources, time_length=60, frequencies = None):
+    def __init__(self, sources, time_length=60, frequencies = None, Fs = 200):
         '''
         initialize environment variable
         Parameters
@@ -25,7 +25,7 @@ class environment:
             dataframe of source x and y cooridinates
         '''
         # Define Environment Variabels
-        self.Fs = 200
+        self.Fs = Fs
         f0 = 50 #Hz
         self.w0 = 2*np.pi*f0
         self.sigma = 1/(5*f0)
@@ -34,12 +34,13 @@ class environment:
         
         self.time_length = time_length
         self.t = np.arange(0,self.time_length, 1/self.Fs)
-        self.nodeA = (-1500, 0)
-        self.nodeB = (1500, 0)
+        self.nodeA = (-3186/2, 0)
+        self.nodeB = (3186/2, 0)
 
         self.sources = sources
         
         self.frequencies = frequencies
+        self.tau = np.linspace(-self.time_length + 1/self.Fs, self.time_length - 1/self.Fs, 2*self.time_length*self.Fs -1)
 
     def __get_time_signal(self, r):
         '''
@@ -361,7 +362,7 @@ class environment:
                 else:
                     R += result[k]
         
-        self.tau = np.linspace(-self.time_length + 1/self.Fs, self.time_length - 1/self.Fs, 2*self.time_length*self.Fs -1)
+        
         self.R = R
         return self.tau, self.R
     
@@ -427,22 +428,22 @@ class environment:
 
         fig, ax = plt.subplots(1,1, figsize=(7,7))
         # Plot Gaussian Noise Sources
-        ax.plot(noise_sources_x, noise_sources_y, '.')
+        ax.plot(noise_sources_x, noise_sources_y, 'k.', markersize=1)
 
         # Plot Sine Noise Sources
-        ax.plot(sin_sources_x, sin_sources_y, '.', color = 'C1', markersize=15)
+        ax.plot(sin_sources_x, sin_sources_y, 'k.', markersize=7)
 
         # Plot hydrophones
-        ax.plot(self.nodeA[0], self.nodeA[1], '.', color = 'r', markersize=20)
-        ax.plot(self.nodeB[0], self.nodeB[1], '.', color = 'r', markersize=20)
+        ax.plot(self.nodeA[0], self.nodeA[1], 'o', color = 'r', markersize=10)
+        ax.plot(self.nodeB[0], self.nodeB[1], 'o', color = 'r', markersize=10)
 
         leg_elements = [
             Line2D(
                 [0],[0], marker='o', color='w', label='Sources',
-                markerfacecolor='C0', markersize=10),
+                markerfacecolor='k', markersize=8),
             Line2D(
                 [0],[0], marker='o', color='w', label='Hydrophone Nodes',
-                markerfacecolor='r', markersize=10),
+                markerfacecolor='r', markersize=8),
             #Line2D(
             #    [0],[0], marker='o', color='w', label='Fin Whale Source',
             #    markerfacecolor='C1', markersize=10)
@@ -471,6 +472,53 @@ class environment:
 
         return NCCF
 
+    def directly_sim_NCCF(self, fc, correlation_type='single'):
+        '''
+        directly_sim_NCCF - simulate the theoretical NCCF using the peak location caused by the
+            difference in ranges between the source and H1 and H2. A Gaussian pulse is used
+            TODO : code to solve for pulse width given cutoff frequency is brokem
+        
+        Parameters
+        ----------
+        fc : float
+            cutoff frequency (in Hertz) of guassian pulse
+            
+        correlation_type : str
+            'single' or 'all'
+            determines wheter to return signle correlation or all correaltions
+        
+        Returns
+        -------
+        R : np.array
+            numpy array of shape (len(sources), len(tau)) or
+            of shape (len(tau)) depending on correlation_type        
+        '''
+        
+        rs = np.vstack((self.sources.X, self.sources.Y))
+        r1 = np.matlib.repmat(np.expand_dims(np.array(self.nodeA), 1), 1, len(self.sources))
+        r2 = np.matlib.repmat(np.expand_dims(np.array(self.nodeB), 1), 1, len(self.sources))
+        R1 = np.linalg.norm(r1 - rs, axis=0)
+        R2 = np.linalg.norm(r2 - rs, axis=0)
+        Rd = R1 - R2
+        a = -np.pi**2*fc/np.log(1/np.sqrt(2))
+
+        if correlation_type == 'single':
+            x = np.zeros(self.tau.shape)
+
+            for k in tqdm(range(len(self.sources))):
+                x1 = np.sqrt(a/np.pi)*np.exp(-a*(self.tau-Rd[k]/self.c)**2)
+                x = x + x1
+        elif correlation_type == 'all':
+            x = np.zeros((len(self.sources), len(self.tau)))
+            
+            for k in tqdm(range(len(self.sources))):
+                x1 = np.sqrt(a/np.pi)*np.exp(-a*(self.tau-Rd[k]/self.c)**2)
+                x[k,:] = x1
+        else:
+            raise Exception("invalid correlation_type string should ['single', 'all']")
+        
+        return x
+            
 class source_distribution2D:
     def __init__(self):
         pass
@@ -607,8 +655,8 @@ class source_distribution2D:
         y_coord = []
 
         while len(x_coord) < n_sources:
-            x = np.random.uniform(-outer_radius, outer_radius, 1)
-            y = np.random.uniform(-outer_radius, outer_radius, 1)
+            x = np.random.uniform(-outer_radius, outer_radius, 1)[0]
+            y = np.random.uniform(-outer_radius, outer_radius, 1)[0]
 
             if ((x**2 + y**2)**0.5 < inner_radius) | ((x**2 + y**2)**0.5 > outer_radius):
                 pass
@@ -666,3 +714,76 @@ class source_distribution2D:
         self.sources = self.sources.append(pd.DataFrame(sources_dict))
         
         return self.sources
+
+
+def calc_directivity(x, y, R, radius):
+    '''
+    calc_directivity - calculates the directivity pattern of the NCCF
+        for a given noise source distribution.
+
+    Parameters
+    ----------
+    x : array like
+        x dimension location of sources
+    y : array like
+        y dimension location of sources
+    R : array like
+        correlations due to point sources at (x,y). Should have shape
+        (len(x), len(tau)) where tau is delay time of correlations
+    radius : float
+        radius (in meters) to calculate the directivity
+    
+    Returns
+    -------
+    theta : np.array
+        angle bins for directivity
+    directivity : np.array
+        directivity pattern for given source distribution
+    '''    
+    
+    print('calculating correlation coefficents...')
+    rhos = calc_corr_coef(R)
+    print('calculating surface interpolation...')
+    f = scipy.interpolate.interp2d(x, y, rhos, kind='cubic')
+    
+    theta = np.linspace(0,2*np.pi, 1000)
+    x_new = radius*np.cos(theta)
+    y_new = radius*np.sin(theta)
+    
+    directivity = f(x_new, y_new)
+    
+    return theta, directivity
+    
+def calc_corr_coef(R, R_ens, plot=False, sources=None):
+    '''
+    calc_corr_coef - calculates the correlation coefficent for 
+        a single source NCCF and the ensemble NCCF
+    
+    Parameters
+    ----------
+    R : np.array
+        array of shape (len(sources), len(tau)). created by 
+        environment.directly_sim_NCCF(correlation_type='all')
+    R_ens : np.array
+        array of shape(len(tau)). this can either be the ensemble
+        cross correlation from all sound sources, or it can be
+        the theoretical TDGF between the two points
+    plot : bool
+        determines whether to plot correlation coefficient
+        
+    Returns
+    -------
+    R_corr : np.array
+        correlation of single NCCF to ensemble NCCF
+    '''
+    rhos = []
+    for k in tqdm(range(R.shape[0])):
+        rho,_ = scipy.stats.pearsonr(R_ens, R[k,:])
+        rhos.append(rho)
+    rhos = np.array(rhos)
+    
+    if plot:
+        plt.figure(figsize=(11,9))
+        plt.tricontourf(sources.X, sources.Y, rhos, 1000, cmap='plasma')
+        plt.colorbar()
+    return rhos
