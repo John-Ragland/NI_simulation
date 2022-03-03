@@ -346,10 +346,13 @@ class environment:
         # Divide dataframe up into list of rows
         chunks = [sources.iloc[i:i + 1,:] for i in range(0, sources.shape[0], 1)]
         # Original Method
-        print(num_processes)
+        # print(num_processes)
         
         Pool = mp.Pool(processes = num_processes)
         result = list(tqdm(Pool.imap(self.get_correlations_1cpu, chunks, chunksize), total=len(self.sources), disable=(not verbose)))
+        #result = list(Pool.imap(self.get_correlations_1cpu, chunks, chunksize))
+        return result
+    
         Pool.close()
         
         if correlation_type == 'all':
@@ -434,8 +437,8 @@ class environment:
         ax.plot(sin_sources_x, sin_sources_y, 'k.', markersize=7)
 
         # Plot hydrophones
-        ax.plot(self.nodeA[0], self.nodeA[1], 'o', color = 'r', markersize=10)
-        ax.plot(self.nodeB[0], self.nodeB[1], 'o', color = 'r', markersize=10)
+        ax.plot(self.nodeA[0], self.nodeA[1], 'o', color = 'r', markersize=5)
+        ax.plot(self.nodeB[0], self.nodeB[1], 'o', color = 'r', markersize=5)
 
         leg_elements = [
             Line2D(
