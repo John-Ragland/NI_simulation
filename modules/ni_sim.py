@@ -351,7 +351,6 @@ class environment:
         Pool = mp.Pool(processes = num_processes)
         result = list(tqdm(Pool.imap(self.get_correlations_1cpu, chunks, chunksize), total=len(self.sources), disable=(not verbose)))
         #result = list(Pool.imap(self.get_correlations_1cpu, chunks, chunksize))
-        return result
     
         Pool.close()
         
